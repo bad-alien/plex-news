@@ -38,4 +38,6 @@ env/
 *.db
 *.sqlite3
 output_images/
-data/ 
+data/
+newsletter_preview.html
+assets/images/logo.* 

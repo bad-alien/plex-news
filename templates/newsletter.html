@@ -27,7 +27,7 @@
         .header {
             text-align: center;
             padding: 20px 0;
-            background-color: #e5a00d;
+            background-color: #282a2d;
             color: white;
             border-radius: 8px 8px 0 0;
         }
@@ -35,6 +35,18 @@
         .header h1 {
             margin: 0;
             font-size: 24px;
+        }
+
+        .logo {
+            max-width: 200px;
+            height: auto;
+            margin: 0 auto 15px;
+            display: block;
+        }
+
+        .logo img {
+            max-width: 100%;
+            height: auto;
         }
 
         /* Section styles */
@@ -52,6 +64,15 @@
             margin-bottom: 15px;
             border-bottom: 2px solid #e5a00d;
             padding-bottom: 5px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .section-icon {
+            width: 24px;
+            height: 24px;
+            object-fit: contain;
         }
 
         /* Media item styles */
@@ -61,6 +82,11 @@
             padding: 10px;
             background-color: #f9f9f9;
             border-radius: 4px;
+            transition: transform 0.2s ease;
+        }
+
+        .media-item:hover {
+            transform: translateX(5px);
         }
 
         .media-poster {
@@ -69,6 +95,18 @@
             object-fit: cover;
             border-radius: 4px;
             margin-right: 15px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .media-poster.missing {
+            background-color: #e1e1e1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #666;
+            font-size: 12px;
+            text-align: center;
+            padding: 10px;
         }
 
         .media-info {
@@ -91,6 +129,35 @@
         .media-summary {
             font-size: 14px;
             color: #666;
+            display: -webkit-box;
+            -webkit-line-clamp: 3;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+
+        .media-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            margin-right: 8px;
+            color: white;
+            background-color: #e5a00d;
+        }
+
+        .media-stats {
+            margin-top: 8px;
+            font-size: 14px;
+            color: #666;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .media-stats-icon {
+            width: 16px;
+            height: 16px;
+            object-fit: contain;
         }
 
         /* Stats section */
@@ -98,16 +165,21 @@
             display: flex;
             justify-content: space-between;
             flex-wrap: wrap;
+            gap: 15px;
         }
 
         .stat-box {
             flex: 1;
             min-width: 150px;
-            margin: 10px;
             padding: 15px;
             background-color: #f9f9f9;
             border-radius: 4px;
             text-align: center;
+            transition: transform 0.2s ease;
+        }
+
+        .stat-box:hover {
+            transform: translateY(-2px);
         }
 
         .stat-number {
@@ -119,6 +191,7 @@
         .stat-label {
             font-size: 14px;
             color: #666;
+            margin-top: 5px;
         }
 
         /* Footer styles */
@@ -128,6 +201,14 @@
             color: #666;
             font-size: 12px;
             border-top: 1px solid #e1e1e1;
+            margin-top: 30px;
+        }
+
+        .footer-logo {
+            max-width: 100px;
+            height: auto;
+            margin: 0 auto 10px;
+            opacity: 0.7;
         }
 
         /* Responsive design */
@@ -151,6 +232,10 @@
             .stat-box {
                 min-width: calc(50% - 20px);
             }
+
+            .stats-container {
+                gap: 10px;
+            }
         }
     </style>
 </head>
@@ -158,17 +243,29 @@
     <div class="container">
         <!-- Header -->
         <div class="header">
-            <h1>Your Plex Weekly Digest</h1>
+            {% if logo_path %}
+            <div class="logo">
+                <img src="{{ logo_path }}" alt="{{ server_name }} Logo">
+            </div>
+            {% endif %}
+            <h1>Your Weekly Digest</h1>
             <p>{{ date_range }}</p>
         </div>
 
         <!-- Recently Added Section -->
         <div class="section">
-            <h2 class="section-title">📺 Recently Added</h2>
+            <h2 class="section-title">
+                <img src="assets/images/recently-added.png" alt="📺" class="section-icon">
+                Recently Added
+            </h2>
             {% for item in recently_added %}
             <div class="media-item">
-                {% if item.thumb or item.poster %}
-                <img class="media-poster" src="{{ item.thumb or item.poster }}" alt="{{ item.title }}">
+                {% if item.thumb %}
+                <img class="media-poster" src="{{ item.thumb }}" alt="{{ item.title }}">
+                {% else %}
+                <div class="media-poster missing">
+                    No Poster Available
+                </div>
                 {% endif %}
                 <div class="media-info">
                     <h3 class="media-title">{{ item.title }}</h3>
@@ -192,16 +289,31 @@
 
         <!-- Popular Content Section -->
         <div class="section">
-            <h2 class="section-title">🔥 Trending This Week</h2>
+            <h2 class="section-title">
+                <img src="assets/images/trending.png" alt="🔥" class="section-icon">
+                Trending This Week
+            </h2>
             {% for item in popular_content %}
             <div class="media-item">
                 {% if item.thumb %}
                 <img class="media-poster" src="{{ item.thumb }}" alt="{{ item.title }}">
+                {% else %}
+                <div class="media-poster missing">
+                    No Poster Available
+                </div>
                 {% endif %}
                 <div class="media-info">
                     <h3 class="media-title">{{ item.title }}</h3>
                     <div class="media-meta">
-                        <span>{{ item.play_count }} plays</span>
+                        {% if item.year %}
+                        <span>{{ item.year }}</span> •
+                        {% endif %}
+                        <span class="media-badge">{{ item.media_type }}</span>
+                        <span class="media-badge">{{ item.stat_type }}</span>
+                    </div>
+                    <div class="media-stats">
+                        <img src="assets/images/play.png" alt="▶️" class="media-stats-icon">
+                        <strong>{{ item.play_count }}</strong> plays by <strong>{{ item.users_watched }}</strong> users
                     </div>
                 </div>
             </div>
@@ -210,28 +322,30 @@
 
         <!-- Most Watched By Users Section -->
         <div class="section">
-            <h2 class="section-title">👥 Community Favorites</h2>
+            <h2 class="section-title">
+                <img src="assets/images/community.png" alt="👥" class="section-icon">
+                Community Favorites
+            </h2>
             {% for item in most_watched %}
             <div class="media-item">
                 {% if item.thumb %}
                 <img class="media-poster" src="{{ item.thumb }}" alt="{{ item.title }}">
+                {% else %}
+                <div class="media-poster missing">
+                    No Poster Available
+                </div>
                 {% endif %}
                 <div class="media-info">
-                    <h3 class="media-title">
-                        {% if item.type == 'episode' %}
-                            {{ item.grandparent_title }} - {{ item.title }}
-                        {% else %}
-                            {{ item.title }}
-                        {% endif %}
-                    </h3>
+                    <h3 class="media-title">{{ item.title }}</h3>
                     <div class="media-meta">
                         {% if item.year %}
                         <span>{{ item.year }}</span> •
                         {% endif %}
-                        <span>Watched by {{ item.unique_viewers }} users</span>
+                        <span class="media-badge">{{ item.type }}</span>
                     </div>
-                    <div class="media-summary">
-                        Watched by: {{ item.viewers|join(', ') }}
+                    <div class="media-stats">
+                        <img src="assets/images/users.png" alt="👥" class="media-stats-icon">
+                        Watched by <strong>{{ item.unique_viewers }}</strong> different users
                     </div>
                 </div>
             </div>
@@ -240,7 +354,10 @@
 
         <!-- User Stats Section -->
         <div class="section">
-            <h2 class="section-title">📊 User Activity</h2>
+            <h2 class="section-title">
+                <img src="assets/images/stats.png" alt="📊" class="section-icon">
+                User Activity
+            </h2>
             <div class="stats-container">
                 {% for stat in user_stats %}
                 <div class="stat-box">
@@ -253,6 +370,9 @@
 
         <!-- Footer -->
         <div class="footer">
+            {% if logo_path %}
+            <img src="{{ logo_path }}" alt="{{ server_name }}" class="footer-logo">
+            {% endif %}
             <p>Generated for {{ server_name }} • {{ generation_date }}</p>
             <p>Powered by Plex & Tautulli</p>
         </div>

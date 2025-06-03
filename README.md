@@ -1,80 +1,81 @@
 # Plex Newsletter Generator
 
-Automatically generate and send personalized newsletters to your Plex users featuring recently added content, trending media, and community insights.
+A Python application that generates beautiful weekly newsletters for your Plex server using Tautulli statistics.
 
 ## Features
 
-- 📺 Recently added movies and TV shows
-- 🔥 Trending content based on play count
-- 👥 Community favorites (most watched by unique users)
-- 📊 User activity statistics
-- 📧 Beautiful, responsive email design
+- Weekly digest of your Plex server activity
+- Recently added content overview
+- Trending content analysis
+- Community favorites (most watched by multiple users)
+- User activity statistics
+- Beautiful, responsive HTML email template
+- SQLite database for caching and offline access
+- Customizable with your own logo and assets
 
-## Prerequisites
+## Requirements
 
 - Python 3.x
+- Tautulli server with API access
 - Plex Media Server
-- Tautulli installed and configured
-- Gmail account (for sending newsletters)
 
 ## Installation
 
 1. Clone the repository:
-   ```bash
-   git clone https://github.com/YOUR_USERNAME/plex-news.git
-   cd plex-news
-   ```
+```bash
+git clone https://github.com/bad-alien/plex-news.git
+cd plex-news
+```
 
 2. Create and activate a virtual environment:
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate  # On Windows: .\venv\Scripts\activate
-   ```
+```bash
+python3 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
 
 3. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+```bash
+pip install -r requirements.txt
+```
 
-4. Create a `.env` file with your configuration:
-   ```
-   TAUTULLI_URL=http://your-tautulli-ip:8181
-   TAUTULLI_API_KEY=your_api_key_here
-   ```
+4. Create a `.env` file with your Tautulli configuration:
+```
+TAUTULLI_URL=http://your.tautulli.server:port
+TAUTULLI_API_KEY=your_api_key
+```
+
+5. (Optional) Add your logo:
+- Place your logo in `assets/images/` as either `logo.png` or `logo.jpg`
 
 ## Usage
 
-Generate a newsletter preview:
+Generate a newsletter:
 ```bash
 python generate_newsletter.py
 ```
 
-This will create a `newsletter_preview.html` file that you can open in your browser.
+The script will:
+1. Connect to your Tautulli server
+2. Gather statistics and media information
+3. Generate an HTML newsletter
+4. Save it as `newsletter_preview.html`
 
-## Project Structure
+## Customization
 
-```
-plex-news/
-├── src/
-│   ├── __init__.py
-│   └── tautulli_api.py    # Tautulli API interaction
-├── templates/
-│   └── newsletter.html    # Newsletter template
-├── .env                   # Configuration (not in repo)
-├── .gitignore
-├── README.md
-├── requirements.txt
-└── generate_newsletter.py # Main script
-```
+### Assets
+Place your custom assets in the `assets/images/` directory:
+- `logo.png` or `logo.jpg` - Your server logo
+- Section icons (optional):
+  * `recently-added.png`
+  * `trending.png`
+  * `community.png`
+  * `stats.png`
+  * `play.png`
+  * `users.png`
 
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
+### Database
+The application uses SQLite to cache data and reduce API calls. The database is automatically created at `data/plex_stats.db`.
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details. 
+MIT License - See LICENSE file for details. 

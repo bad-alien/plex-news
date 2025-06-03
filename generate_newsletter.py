@@ -1,45 +1,57 @@
 from datetime import datetime, timedelta
 from jinja2 import Environment, FileSystemLoader
 from src.tautulli_api import TautulliAPI
+from pathlib import Path
 
 def format_duration(minutes):
     if not minutes:
-        return ""
+        return "0m"
     hours = minutes // 60
     mins = minutes % 60
     if hours > 0:
         return f"{hours}h {mins}m"
     return f"{mins}m"
 
-def generate_newsletter():
+def generate_newsletter(force_sync=False):
     # Initialize Tautulli API
     api = TautulliAPI()
+    
+    # Sync data if requested
+    if force_sync:
+        print("Syncing data from Tautulli...")
+        api.sync_data()
     
     # Get the date range for the newsletter
     end_date = datetime.now()
     start_date = end_date - timedelta(days=7)
     date_range = f"{start_date.strftime('%B %d')} - {end_date.strftime('%B %d, %Y')}"
 
-    # Get recently added content
+    # Check for logo file
+    logo_path = None
+    if Path("assets/images/logo.png").exists():
+        logo_path = "assets/images/logo.png"
+    elif Path("assets/images/logo.jpg").exists():
+        logo_path = "assets/images/logo.jpg"
+
+    # Get recently added content (excluding music)
     recently_added = api.get_recently_added(count=5)
-    
-    # Get popular content from home stats
+    recently_added = [
+        item for item in recently_added 
+        if item.get('media_type') not in ['track', 'album', 'artist']
+    ]
+    print(f"Found {len(recently_added)} recently added items")
+
+    # Get popular content from home stats (music already excluded in API)
     home_stats = api.get_home_stats(time_range=7)
-    popular_content = []
-    for stat in home_stats:
-        if stat.get('id') in ['popular_movies', 'popular_tv']:
-            for item in stat.get('rows', [])[:3]:
-                popular_content.append({
-                    'title': item.get('title'),
-                    'thumb': item.get('thumb', ''),
-                    'play_count': item.get('total_plays', 0)
-                })
+    print(f"Found {len(home_stats)} trending items")
 
-    # Get most watched content by unique users
-    most_watched = api.get_most_watched_by_users(days=7)[:3]  # Top 3 most watched items
+    # Get most watched content by unique users (music already excluded)
+    most_watched = api.get_most_watched_by_users(days=7)
+    print(f"Found {len(most_watched)} items watched by multiple users")
 
-    # Get user statistics using the new method
+    # Get user statistics
     stats = api.get_user_stats(days=7)
+    print(f"User stats: {stats}")
     
     user_stats = [
         {'label': 'Total Plays', 'value': stats['total_plays']},
@@ -64,18 +76,19 @@ def generate_newsletter():
     newsletter_html = template.render(
         date_range=date_range,
         recently_added=recently_added,
-        popular_content=popular_content,
-        most_watched=most_watched,  # Add most watched content to the template
+        popular_content=home_stats[:5],  # Limit to top 5
+        most_watched=most_watched[:3],  # Limit to top 3
         user_stats=user_stats,
         server_name="Your Plex Server",
-        generation_date=datetime.now().strftime("%B %d, %Y")
+        generation_date=datetime.now().strftime("%B %d, %Y"),
+        logo_path=logo_path  # Add logo path to template
     )
 
     # Save the newsletter
     with open('newsletter_preview.html', 'w') as f:
         f.write(newsletter_html)
 
-    print("Newsletter generated! Open newsletter_preview.html in your browser to preview.")
+    print("\nNewsletter generated! Open newsletter_preview.html in your browser to preview.")
 
 if __name__ == "__main__":
-    generate_newsletter() 
+    generate_newsletter(force_sync=True)  # Force sync on first run 
