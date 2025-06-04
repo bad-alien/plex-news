@@ -40,48 +40,57 @@ class TautulliAPI:
         """Sync data from Tautulli to local database"""
         last_sync = self.db.get_last_sync_time()
         
-        # Get recently added items
-        result = self._make_request("get_recently_added", count=100)
-        if result and "response" in result:
-            items = result["response"].get("data", {}).get("recently_added", [])
-            for item in items:
-                self.db.store_media_item(item)
-        
-        # Get history with pagination
-        offset = 0
-        while True:
-            # If not a force sync, only get items since last sync
-            params = {
-                "length": 1000,
-                "start": offset
-            }
+        try:
+            self.db.begin_transaction()
             
-            if not force_full_sync and last_sync['history'] > 0:
-                params["start_date"] = last_sync['history']
+            # Get recently added items
+            result = self._make_request("get_recently_added", count=100)
+            if result and "response" in result:
+                items = result["response"].get("data", {}).get("recently_added", [])
+                for item in items:
+                    self.db.store_media_item(item)
             
-            result = self._make_request("get_history", **params)
-            
-            if not result or "response" not in result:
-                break
+            # Get history with pagination
+            offset = 0
+            while True:
+                # If not a force sync, only get items since last sync
+                params = {
+                    "length": 1000,
+                    "start": offset
+                }
                 
-            data = result["response"].get("data", {})
-            history = data.get("data", [])
-            if not history:
-                break
+                if not force_full_sync and last_sync['history'] > 0:
+                    params["start_date"] = last_sync['history']
                 
-            # Store each history item
-            for item in history:
-                self.db.store_play_history(item)
-                # Also store the media item if it doesn't exist
-                self.db.store_media_item(item)
+                result = self._make_request("get_history", **params)
+                
+                if not result or "response" not in result:
+                    break
+                    
+                data = result["response"].get("data", {})
+                history = data.get("data", [])
+                if not history:
+                    break
+                    
+                # Store each history item
+                for item in history:
+                    self.db.store_play_history(item)
+                    # Also store the media item if it doesn't exist
+                    self.db.store_media_item(item)
+                
+                offset += len(history)
+                total_records = data.get("recordsTotal", 0)
+                if offset >= total_records:
+                    break
             
-            offset += len(history)
-            total_records = data.get("recordsTotal", 0)
-            if offset >= total_records:
-                break
-        
-        print(f"Data sync completed. {'Full sync' if force_full_sync else 'Incremental sync'}")
-        return True
+            self.db.commit_transaction()
+            print(f"Data sync completed. {'Full sync' if force_full_sync else 'Incremental sync'}")
+            return True
+            
+        except Exception as e:
+            print(f"Error during sync: {e}")
+            self.db.rollback_transaction()
+            return False
 
     def get_recently_added(self, count=5):
         """Get recently added media"""

@@ -1,6 +1,8 @@
 import sqlite3
 from datetime import datetime
 from pathlib import Path
+import time
+from contextlib import contextmanager
 
 class Database:
     def __init__(self, db_path="data/plex_stats.db"):
@@ -8,21 +10,66 @@ class Database:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         
         self.db_path = db_path
+        self._connection = None
         self.init_db()
 
-    def get_connection(self):
+    @contextmanager
+    def get_connection(self, new_connection=False):
         """Get a database connection with row factory"""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        if new_connection or self._connection is None:
+            conn = sqlite3.connect(self.db_path, timeout=60)
+            conn.row_factory = sqlite3.Row
+            try:
+                yield conn
+            finally:
+                conn.close()
+        else:
+            yield self._connection
+
+    def execute_with_retry(self, cursor, query, params=()):
+        """Execute a query with retry logic"""
+        max_retries = 3
+        retry_delay = 1  # seconds
+        
+        for attempt in range(max_retries):
+            try:
+                return cursor.execute(query, params)
+            except sqlite3.OperationalError as e:
+                if "database is locked" in str(e) and attempt < max_retries - 1:
+                    print(f"Database is locked, retrying in {retry_delay} seconds...")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                else:
+                    raise
+
+    def begin_transaction(self):
+        """Start a new transaction"""
+        if self._connection is not None:
+            self._connection.close()
+        self._connection = sqlite3.connect(self.db_path, timeout=60)
+        self._connection.row_factory = sqlite3.Row
+
+    def commit_transaction(self):
+        """Commit the current transaction and close the connection"""
+        if self._connection is not None:
+            self._connection.commit()
+            self._connection.close()
+            self._connection = None
+
+    def rollback_transaction(self):
+        """Rollback the current transaction and close the connection"""
+        if self._connection is not None:
+            self._connection.rollback()
+            self._connection.close()
+            self._connection = None
 
     def init_db(self):
         """Initialize the database schema"""
-        with self.get_connection() as conn:
+        with self.get_connection(new_connection=True) as conn:
             cursor = conn.cursor()
             
             # Create tables
-            cursor.execute("""
+            self.execute_with_retry(cursor, """
                 CREATE TABLE IF NOT EXISTS media_items (
                     rating_key TEXT PRIMARY KEY,
                     title TEXT NOT NULL,
@@ -36,7 +83,7 @@ class Database:
                 )
             """)
             
-            cursor.execute("""
+            self.execute_with_retry(cursor, """
                 CREATE TABLE IF NOT EXISTS play_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     rating_key TEXT NOT NULL,
@@ -47,7 +94,7 @@ class Database:
                 )
             """)
             
-            cursor.execute("""
+            self.execute_with_retry(cursor, """
                 CREATE TABLE IF NOT EXISTS users (
                     user_id TEXT PRIMARY KEY,
                     username TEXT NOT NULL,
@@ -57,7 +104,7 @@ class Database:
             """)
             
             # Add sync_status table
-            cursor.execute("""
+            self.execute_with_retry(cursor, """
                 CREATE TABLE IF NOT EXISTS sync_status (
                     id INTEGER PRIMARY KEY CHECK (id = 1),
                     last_history_sync INTEGER,
@@ -67,12 +114,12 @@ class Database:
             """)
             
             # Create indexes
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_history_watched_at ON play_history (watched_at)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_history_user ON play_history (user_id)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_media_type ON media_items (media_type)")
+            self.execute_with_retry(cursor, "CREATE INDEX IF NOT EXISTS idx_history_watched_at ON play_history (watched_at)")
+            self.execute_with_retry(cursor, "CREATE INDEX IF NOT EXISTS idx_history_user ON play_history (user_id)")
+            self.execute_with_retry(cursor, "CREATE INDEX IF NOT EXISTS idx_media_type ON media_items (media_type)")
             
             # Initialize sync status if not exists
-            cursor.execute("""
+            self.execute_with_retry(cursor, """
                 INSERT OR IGNORE INTO sync_status (id, last_history_sync, last_library_sync)
                 VALUES (1, 0, 0)
             """)
@@ -81,9 +128,9 @@ class Database:
 
     def get_last_sync_time(self):
         """Get the timestamp of the last successful sync"""
-        with self.get_connection() as conn:
+        with self.get_connection(new_connection=True) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT last_history_sync, last_library_sync FROM sync_status WHERE id = 1")
+            self.execute_with_retry(cursor, "SELECT last_history_sync, last_library_sync FROM sync_status WHERE id = 1")
             result = cursor.fetchone()
             return {
                 'history': result['last_history_sync'],
@@ -93,25 +140,36 @@ class Database:
     def update_sync_time(self, sync_type='both'):
         """Update the last sync timestamp"""
         current_time = int(datetime.now().timestamp())
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            if sync_type == 'history' or sync_type == 'both':
-                cursor.execute("UPDATE sync_status SET last_history_sync = ? WHERE id = 1", (current_time,))
-            if sync_type == 'library' or sync_type == 'both':
-                cursor.execute("UPDATE sync_status SET last_library_sync = ? WHERE id = 1", (current_time,))
-            cursor.execute("UPDATE sync_status SET total_items_synced = total_items_synced + 1 WHERE id = 1")
-            conn.commit()
+        if self._connection is None:
+            self.begin_transaction()
+        
+        cursor = self._connection.cursor()
+        if sync_type == 'history' or sync_type == 'both':
+            self.execute_with_retry(cursor, 
+                "UPDATE sync_status SET last_history_sync = ? WHERE id = 1", 
+                (current_time,)
+            )
+        if sync_type == 'library' or sync_type == 'both':
+            self.execute_with_retry(cursor, 
+                "UPDATE sync_status SET last_library_sync = ? WHERE id = 1", 
+                (current_time,)
+            )
+        self.execute_with_retry(cursor, 
+            "UPDATE sync_status SET total_items_synced = total_items_synced + 1 WHERE id = 1"
+        )
 
     def store_media_item(self, item):
         """Store a media item in the database"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            
+        if self._connection is None:
+            self.begin_transaction()
+        
+        cursor = self._connection.cursor()
+        try:
             # For TV shows, we want to store both show and episode info
             if item.get('media_type') == 'episode':
                 # Store the show
                 show_key = f"show_{item.get('grandparent_rating_key', '')}"
-                cursor.execute("""
+                self.execute_with_retry(cursor, """
                     INSERT OR REPLACE INTO media_items (
                         rating_key, title, year, media_type, thumb, updated_at
                     ) VALUES (?, ?, ?, ?, ?, ?)
@@ -125,7 +183,7 @@ class Database:
                 ))
                 
                 # Store the episode
-                cursor.execute("""
+                self.execute_with_retry(cursor, """
                     INSERT OR REPLACE INTO media_items (
                         rating_key, title, year, media_type, thumb, duration, 
                         summary, added_at, updated_at
@@ -143,7 +201,7 @@ class Database:
                 ))
             else:
                 # Store movie or music
-                cursor.execute("""
+                self.execute_with_retry(cursor, """
                     INSERT OR REPLACE INTO media_items (
                         rating_key, title, year, media_type, thumb, duration,
                         summary, added_at, updated_at
@@ -162,14 +220,20 @@ class Database:
             
             # Update sync status
             self.update_sync_time('library')
+        except Exception as e:
+            print(f"Error storing media item: {e}")
+            self.rollback_transaction()
+            raise
 
     def store_play_history(self, history_item):
         """Store a play history item"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            
+        if self._connection is None:
+            self.begin_transaction()
+        
+        cursor = self._connection.cursor()
+        try:
             # Store or update user
-            cursor.execute("""
+            self.execute_with_retry(cursor, """
                 INSERT OR REPLACE INTO users (
                     user_id, username, friendly_name, last_seen
                 ) VALUES (?, ?, ?, ?)
@@ -181,7 +245,7 @@ class Database:
             ))
             
             # Check if this history item already exists
-            cursor.execute("""
+            self.execute_with_retry(cursor, """
                 SELECT id FROM play_history 
                 WHERE rating_key = ? AND user_id = ? AND watched_at = ?
             """, (
@@ -192,7 +256,7 @@ class Database:
             
             if not cursor.fetchone():
                 # Only insert if it's a new history item
-                cursor.execute("""
+                self.execute_with_retry(cursor, """
                     INSERT INTO play_history (
                         rating_key, user_id, watched_at, duration
                     ) VALUES (?, ?, ?, ?)
@@ -205,6 +269,10 @@ class Database:
                 
                 # Update sync status
                 self.update_sync_time('history')
+        except Exception as e:
+            print(f"Error storing play history: {e}")
+            self.rollback_transaction()
+            raise
 
     def get_recently_added(self, days=7, limit=5, media_types=None):
         """Get recently added items"""
