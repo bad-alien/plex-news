@@ -56,11 +56,50 @@ class Database:
                 )
             """)
             
+            # Add sync_status table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS sync_status (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    last_history_sync INTEGER,
+                    last_library_sync INTEGER,
+                    total_items_synced INTEGER DEFAULT 0
+                )
+            """)
+            
             # Create indexes
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_history_watched_at ON play_history (watched_at)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_history_user ON play_history (user_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_media_type ON media_items (media_type)")
             
+            # Initialize sync status if not exists
+            cursor.execute("""
+                INSERT OR IGNORE INTO sync_status (id, last_history_sync, last_library_sync)
+                VALUES (1, 0, 0)
+            """)
+            
+            conn.commit()
+
+    def get_last_sync_time(self):
+        """Get the timestamp of the last successful sync"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT last_history_sync, last_library_sync FROM sync_status WHERE id = 1")
+            result = cursor.fetchone()
+            return {
+                'history': result['last_history_sync'],
+                'library': result['last_library_sync']
+            }
+
+    def update_sync_time(self, sync_type='both'):
+        """Update the last sync timestamp"""
+        current_time = int(datetime.now().timestamp())
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            if sync_type == 'history' or sync_type == 'both':
+                cursor.execute("UPDATE sync_status SET last_history_sync = ? WHERE id = 1", (current_time,))
+            if sync_type == 'library' or sync_type == 'both':
+                cursor.execute("UPDATE sync_status SET last_library_sync = ? WHERE id = 1", (current_time,))
+            cursor.execute("UPDATE sync_status SET total_items_synced = total_items_synced + 1 WHERE id = 1")
             conn.commit()
 
     def store_media_item(self, item):
@@ -120,6 +159,9 @@ class Database:
                     int(item.get('added_at', datetime.now().timestamp())),
                     int(datetime.now().timestamp())
                 ))
+            
+            # Update sync status
+            self.update_sync_time('library')
 
     def store_play_history(self, history_item):
         """Store a play history item"""
@@ -138,17 +180,31 @@ class Database:
                 int(history_item.get('date', datetime.now().timestamp()))
             ))
             
-            # Store play history
+            # Check if this history item already exists
             cursor.execute("""
-                INSERT INTO play_history (
-                    rating_key, user_id, watched_at, duration
-                ) VALUES (?, ?, ?, ?)
+                SELECT id FROM play_history 
+                WHERE rating_key = ? AND user_id = ? AND watched_at = ?
             """, (
                 history_item.get('rating_key'),
                 history_item.get('user_id', 'unknown'),
-                int(history_item.get('date', datetime.now().timestamp())),
-                history_item.get('duration', 0)
+                int(history_item.get('date', datetime.now().timestamp()))
             ))
+            
+            if not cursor.fetchone():
+                # Only insert if it's a new history item
+                cursor.execute("""
+                    INSERT INTO play_history (
+                        rating_key, user_id, watched_at, duration
+                    ) VALUES (?, ?, ?, ?)
+                """, (
+                    history_item.get('rating_key'),
+                    history_item.get('user_id', 'unknown'),
+                    int(history_item.get('date', datetime.now().timestamp())),
+                    history_item.get('duration', 0)
+                ))
+                
+                # Update sync status
+                self.update_sync_time('history')
 
     def get_recently_added(self, days=7, limit=5, media_types=None):
         """Get recently added items"""

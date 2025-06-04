@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 from jinja2 import Environment, FileSystemLoader
 from src.tautulli_api import TautulliAPI
 from pathlib import Path
+import argparse
 
 def format_duration(minutes):
     if not minutes:
@@ -12,14 +13,21 @@ def format_duration(minutes):
         return f"{hours}h {mins}m"
     return f"{mins}m"
 
-def generate_newsletter(force_sync=False):
+def generate_newsletter(force_sync=False, force_full_sync=False):
+    """
+    Generate a Plex newsletter
+    
+    Args:
+        force_sync (bool): Whether to force a sync with Tautulli
+        force_full_sync (bool): Whether to force a full sync instead of incremental
+    """
     # Initialize Tautulli API
     api = TautulliAPI()
     
-    # Sync data if requested
-    if force_sync:
+    # Sync data if requested or if it's the first run
+    if force_sync or force_full_sync:
         print("Syncing data from Tautulli...")
-        api.sync_data()
+        api.sync_data(force_full_sync=force_full_sync)
     
     # Get the date range for the newsletter
     end_date = datetime.now()
@@ -91,4 +99,12 @@ def generate_newsletter(force_sync=False):
     print("\nNewsletter generated! Open newsletter_preview.html in your browser to preview.")
 
 if __name__ == "__main__":
-    generate_newsletter(force_sync=True)  # Force sync on first run 
+    parser = argparse.ArgumentParser(description="Generate a Plex newsletter")
+    parser.add_argument("--force-sync", action="store_true", help="Force a sync with Tautulli")
+    parser.add_argument("--force-full-sync", action="store_true", help="Force a full sync instead of incremental")
+    args = parser.parse_args()
+    
+    generate_newsletter(
+        force_sync=args.force_sync,
+        force_full_sync=args.force_full_sync
+    ) 

@@ -36,8 +36,10 @@ class TautulliAPI:
             print(f"Error making request to Tautulli API: {e}")
             return None
 
-    def sync_data(self):
+    def sync_data(self, force_full_sync=False):
         """Sync data from Tautulli to local database"""
+        last_sync = self.db.get_last_sync_time()
+        
         # Get recently added items
         result = self._make_request("get_recently_added", count=100)
         if result and "response" in result:
@@ -48,11 +50,16 @@ class TautulliAPI:
         # Get history with pagination
         offset = 0
         while True:
-            result = self._make_request(
-                "get_history",
-                length=1000,
-                start=offset
-            )
+            # If not a force sync, only get items since last sync
+            params = {
+                "length": 1000,
+                "start": offset
+            }
+            
+            if not force_full_sync and last_sync['history'] > 0:
+                params["start_date"] = last_sync['history']
+            
+            result = self._make_request("get_history", **params)
             
             if not result or "response" not in result:
                 break
@@ -73,7 +80,8 @@ class TautulliAPI:
             if offset >= total_records:
                 break
         
-        print("Data sync completed")
+        print(f"Data sync completed. {'Full sync' if force_full_sync else 'Incremental sync'}")
+        return True
 
     def get_recently_added(self, count=5):
         """Get recently added media"""
