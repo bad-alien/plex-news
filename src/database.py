@@ -3,6 +3,7 @@ from datetime import datetime
 from pathlib import Path
 import time
 from contextlib import contextmanager
+import os
 
 class Database:
     def __init__(self, db_path="data/plex_stats.db"):
@@ -76,6 +77,11 @@ class Database:
                     year INTEGER,
                     media_type TEXT NOT NULL,
                     thumb TEXT,
+                    thumb_cached_path TEXT,
+                    art TEXT,
+                    art_cached_path TEXT,
+                    banner TEXT,
+                    banner_cached_path TEXT,
                     summary TEXT,
                     duration INTEGER,
                     added_at INTEGER,
@@ -171,29 +177,46 @@ class Database:
                 show_key = f"show_{item.get('grandparent_rating_key', '')}"
                 self.execute_with_retry(cursor, """
                     INSERT OR REPLACE INTO media_items (
-                        rating_key, title, year, media_type, thumb, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                        rating_key, title, year, media_type, 
+                        thumb, thumb_cached_path,
+                        art, art_cached_path,
+                        banner, banner_cached_path,
+                        updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     show_key,
                     item.get('grandparent_title', 'Unknown Show'),
                     item.get('year'),
                     'show',
                     item.get('grandparent_thumb', ''),
+                    item.get('grandparent_thumb_cached', ''),
+                    item.get('grandparent_art', ''),
+                    item.get('grandparent_art_cached', ''),
+                    item.get('grandparent_banner', ''),
+                    item.get('grandparent_banner_cached', ''),
                     int(datetime.now().timestamp())
                 ))
                 
                 # Store the episode
                 self.execute_with_retry(cursor, """
                     INSERT OR REPLACE INTO media_items (
-                        rating_key, title, year, media_type, thumb, duration, 
-                        summary, added_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        rating_key, title, year, media_type,
+                        thumb, thumb_cached_path,
+                        art, art_cached_path,
+                        banner, banner_cached_path,
+                        duration, summary, added_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     item.get('rating_key'),
                     item.get('title'),
                     item.get('year'),
                     'episode',
                     item.get('thumb', ''),
+                    item.get('thumb_cached', ''),
+                    item.get('art', ''),
+                    item.get('art_cached', ''),
+                    item.get('banner', ''),
+                    item.get('banner_cached', ''),
                     item.get('duration', 0),
                     item.get('summary', ''),
                     int(item.get('added_at', datetime.now().timestamp())),
@@ -203,15 +226,23 @@ class Database:
                 # Store movie or music
                 self.execute_with_retry(cursor, """
                     INSERT OR REPLACE INTO media_items (
-                        rating_key, title, year, media_type, thumb, duration,
-                        summary, added_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        rating_key, title, year, media_type,
+                        thumb, thumb_cached_path,
+                        art, art_cached_path,
+                        banner, banner_cached_path,
+                        duration, summary, added_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     item.get('rating_key'),
                     item.get('title'),
                     item.get('year'),
                     item.get('media_type', 'movie'),
                     item.get('thumb', ''),
+                    item.get('thumb_cached', ''),
+                    item.get('art', ''),
+                    item.get('art_cached', ''),
+                    item.get('banner', ''),
+                    item.get('banner_cached', ''),
                     item.get('duration', 0),
                     item.get('summary', ''),
                     int(item.get('added_at', datetime.now().timestamp())),
@@ -274,6 +305,34 @@ class Database:
             self.rollback_transaction()
             raise
 
+    def _process_image_path(self, path):
+        """Convert relative image paths to full URLs with authentication"""
+        if not path or not isinstance(path, str):
+            return None
+        
+        base_url = os.getenv("TAUTULLI_URL", "").rstrip('/')
+        api_key = os.getenv("TAUTULLI_API_KEY", "")
+        
+        if path.startswith('/'):
+            # Convert /library/metadata/XXX/thumb/YYY to API endpoint
+            if path.startswith('/library/metadata/'):
+                # Extract rating key and image type
+                parts = path.split('/')
+                if len(parts) >= 4:
+                    rating_key = parts[3]
+                    img_type = 'thumb'  # Default to thumb
+                    if 'art' in path:
+                        img_type = 'art'
+                    elif 'banner' in path:
+                        img_type = 'banner'
+                    
+                    # Use the pms_image_proxy endpoint
+                    return f"{base_url}/api/v2?apikey={api_key}&cmd=pms_image_proxy&rating_key={rating_key}&img={img_type}"
+            
+            # Fallback for other paths
+            return f"{base_url}{path}?apikey={api_key}"
+        return path
+
     def get_recently_added(self, days=7, limit=5, media_types=None):
         """Get recently added items"""
         with self.get_connection() as conn:
@@ -293,7 +352,15 @@ class Database:
             params.append(limit)
             
             cursor.execute(query, params)
-            return [dict(row) for row in cursor.fetchall()]
+            items = [dict(row) for row in cursor.fetchall()]
+            
+            # Process image paths
+            for item in items:
+                for field in ['thumb', 'parent_thumb', 'grandparent_thumb', 'art', 'banner']:
+                    if item.get(field):
+                        item[field] = self._process_image_path(item[field])
+            
+            return items
 
     def get_most_watched(self, days=7, limit=5, media_types=None):
         """Get most watched content"""
@@ -324,7 +391,15 @@ class Database:
             params.append(limit)
             
             cursor.execute(query, params)
-            return [dict(row) for row in cursor.fetchall()]
+            items = [dict(row) for row in cursor.fetchall()]
+            
+            # Process image paths
+            for item in items:
+                for field in ['thumb', 'parent_thumb', 'grandparent_thumb', 'art', 'banner']:
+                    if item.get(field):
+                        item[field] = self._process_image_path(item[field])
+            
+            return items
 
     def get_user_stats(self, days=7):
         """Get user statistics"""

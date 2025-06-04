@@ -3,6 +3,8 @@ from jinja2 import Environment, FileSystemLoader
 from src.tautulli_api import TautulliAPI
 from pathlib import Path
 import argparse
+import shutil
+import os
 
 def format_duration(minutes):
     if not minutes:
@@ -12,6 +14,21 @@ def format_duration(minutes):
     if hours > 0:
         return f"{hours}h {mins}m"
     return f"{mins}m"
+
+def ensure_assets():
+    """Ensure all required assets exist"""
+    # Create assets directory structure
+    assets_dir = Path("assets/images")
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Check for logo file
+    logo_path = assets_dir / "logo.png"
+    if not logo_path.exists():
+        # Create a default logo.txt to remind users
+        with open(assets_dir / "logo.txt", "w") as f:
+            f.write("Please place your logo.png file in this directory.")
+    
+    return logo_path if logo_path.exists() else None
 
 def generate_newsletter(force_sync=False, force_full_sync=False):
     """
@@ -34,12 +51,8 @@ def generate_newsletter(force_sync=False, force_full_sync=False):
     start_date = end_date - timedelta(days=7)
     date_range = f"{start_date.strftime('%B %d')} - {end_date.strftime('%B %d, %Y')}"
 
-    # Check for logo file
-    logo_path = None
-    if Path("assets/images/logo.png").exists():
-        logo_path = "assets/images/logo.png"
-    elif Path("assets/images/logo.jpg").exists():
-        logo_path = "assets/images/logo.jpg"
+    # Ensure assets exist and get logo path
+    logo_path = ensure_assets()
 
     # Get recently added content (excluding music)
     recently_added = api.get_recently_added(count=5)
@@ -87,9 +100,9 @@ def generate_newsletter(force_sync=False, force_full_sync=False):
         popular_content=home_stats[:5],  # Limit to top 5
         most_watched=most_watched[:3],  # Limit to top 3
         user_stats=user_stats,
-        server_name="Your Plex Server",
+        server_name="Blackbox Alexandria",
         generation_date=datetime.now().strftime("%B %d, %Y"),
-        logo_path=logo_path  # Add logo path to template
+        logo_path=str(logo_path) if logo_path else None
     )
 
     # Save the newsletter
@@ -97,6 +110,8 @@ def generate_newsletter(force_sync=False, force_full_sync=False):
         f.write(newsletter_html)
 
     print("\nNewsletter generated! Open newsletter_preview.html in your browser to preview.")
+    if not logo_path:
+        print("\nNote: No logo found. Please add a logo.png file to assets/images/ directory.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate a Plex newsletter")

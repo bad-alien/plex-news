@@ -3,16 +3,21 @@ import requests
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 from collections import defaultdict
+from pathlib import Path
 from .database import Database
+import shutil
+from PIL import Image, ImageDraw, ImageFont
 
 # Load environment variables
 load_dotenv()
 
 class TautulliAPI:
     def __init__(self):
-        self.base_url = os.getenv("TAUTULLI_URL")
-        self.api_key = os.getenv("TAUTULLI_API_KEY")
+        self.base_url = os.getenv("TAUTULLI_URL", "").rstrip('/')
+        self.api_key = os.getenv("TAUTULLI_API_KEY", "")
         self.db = Database()
+        self.image_cache_dir = Path("assets/cache/images")
+        self.image_cache_dir.mkdir(parents=True, exist_ok=True)
         
         if not self.base_url or not self.api_key:
             raise ValueError("TAUTULLI_URL and TAUTULLI_API_KEY must be set in .env file")
@@ -92,16 +97,217 @@ class TautulliAPI:
             self.db.rollback_transaction()
             return False
 
+    def _download_image(self, url, rating_key, img_type='thumb'):
+        """Download and cache an image locally"""
+        if not rating_key:
+            print(f"Warning: No rating key provided for image download")
+            return None
+            
+        # Check if image is already cached
+        for ext in ['.jpg', '.png']:
+            cached_path = self.image_cache_dir / f"{rating_key}_{img_type}{ext}"
+            if cached_path.exists() and os.path.getsize(cached_path) > 0:
+                return str(cached_path)
+        
+        try:
+            # First try to get the Plex server URL and token from Tautulli
+            server_info = self._make_request("get_server_info")
+            if server_info and "response" in server_info:
+                plex_url = server_info["response"].get("data", {}).get("pms_url", "")
+                plex_token = server_info["response"].get("data", {}).get("pms_token", "")
+                
+                if plex_url and plex_token:
+                    # Get metadata to find the correct image path
+                    metadata_result = self._make_request("get_metadata", rating_key=rating_key)
+                    if metadata_result and "response" in metadata_result:
+                        metadata = metadata_result["response"].get("data", {})
+                        
+                        # Get the appropriate image URL based on type
+                        if img_type == 'thumb':
+                            image_path = metadata.get('thumb', '')
+                        elif img_type == 'art':
+                            image_path = metadata.get('art', '')
+                        else:
+                            image_path = metadata.get('banner', '')
+                        
+                        if image_path:
+                            # Convert the path to a direct Plex URL
+                            if image_path.startswith('/'):
+                                direct_url = f"{plex_url}{image_path}?X-Plex-Token={plex_token}"
+                            else:
+                                direct_url = image_path
+                            
+                            try:
+                                response = requests.get(direct_url, stream=True)
+                                response.raise_for_status()
+                                
+                                # Only proceed if we got actual image data
+                                if response.headers.get('content-type', '').startswith('image/'):
+                                    # Determine file extension from content type
+                                    content_type = response.headers.get('content-type', '')
+                                    ext = '.jpg'  # default to jpg
+                                    if 'png' in content_type:
+                                        ext = '.png'
+                                    elif 'jpeg' in content_type or 'jpg' in content_type:
+                                        ext = '.jpg'
+                                    
+                                    # Create filename using rating_key and image type
+                                    filename = f"{rating_key}_{img_type}{ext}"
+                                    filepath = self.image_cache_dir / filename
+                                    
+                                    # Save the image
+                                    with open(filepath, 'wb') as f:
+                                        for chunk in response.iter_content(chunk_size=8192):
+                                            if chunk:
+                                                f.write(chunk)
+                                    
+                                    # Verify the file was written and has content
+                                    if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
+                                        return str(filepath)
+                            except Exception as e:
+                                print(f"Error downloading image from direct Plex URL for rating_key {rating_key}: {e}")
+            
+            # If all else fails, try the Tautulli proxy
+            proxy_url = f"{self.base_url}/api/v2?apikey={self.api_key}&cmd=pms_image_proxy&rating_key={rating_key}&img={img_type}"
+            response = requests.get(proxy_url, stream=True)
+            response.raise_for_status()
+            
+            # Only proceed if we got actual image data
+            if response.headers.get('content-type', '').startswith('image/'):
+                # Determine file extension from content type
+                content_type = response.headers.get('content-type', '')
+                ext = '.jpg'  # default to jpg
+                if 'png' in content_type:
+                    ext = '.png'
+                elif 'jpeg' in content_type or 'jpg' in content_type:
+                    ext = '.jpg'
+                
+                # Create filename using rating_key and image type
+                filename = f"{rating_key}_{img_type}{ext}"
+                filepath = self.image_cache_dir / filename
+                
+                # Save the image
+                with open(filepath, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                
+                # Verify the file was written and has content
+                if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
+                    return str(filepath)
+        except Exception as e:
+            print(f"Error downloading image for rating_key {rating_key}: {e}")
+        
+        # If we get here, we failed to get the image - use a placeholder
+        placeholder_path = self.image_cache_dir / f"{rating_key}_{img_type}.jpg"
+        if not placeholder_path.exists() or os.path.getsize(placeholder_path) == 0:
+            try:
+                # Create a simple placeholder image using PIL
+                # Create a new image with a dark background
+                width, height = 150, 225  # Standard movie poster ratio
+                img = Image.new('RGB', (width, height), color='#2C3E50')
+                draw = ImageDraw.Draw(img)
+                
+                # Add some text
+                text = "No Image"
+                try:
+                    # Try to load a nice font, fall back to default if not available
+                    font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 20)
+                except:
+                    font = ImageFont.load_default()
+                
+                # Calculate text position to center it
+                text_bbox = draw.textbbox((0, 0), text, font=font)
+                text_width = text_bbox[2] - text_bbox[0]
+                text_height = text_bbox[3] - text_bbox[1]
+                x = (width - text_width) / 2
+                y = (height - text_height) / 2
+                
+                # Draw the text in white
+                draw.text((x, y), text, fill='#FFFFFF', font=font)
+                
+                # Save the image
+                img.save(placeholder_path, 'JPEG', quality=85)
+                return str(placeholder_path)
+            except Exception as e:
+                print(f"Error creating placeholder image: {e}")
+                return None
+        elif os.path.getsize(placeholder_path) > 0:
+            return str(placeholder_path)
+        
+        return None
+
+    def _process_image_path(self, path, rating_key=None):
+        """Convert image paths to local cached versions"""
+        if not path or not isinstance(path, str):
+            return None
+            
+        if path.startswith('/'):
+            # Extract image type
+            img_type = 'thumb'
+            if 'art' in path:
+                img_type = 'art'
+            elif 'banner' in path:
+                img_type = 'banner'
+            
+            # If no rating_key provided, try to extract it from the path
+            if not rating_key and '/metadata/' in path:
+                try:
+                    rating_key = path.split('/metadata/')[1].split('/')[0]
+                except:
+                    pass
+            
+            if not rating_key:
+                print(f"Warning: Could not determine rating_key for path: {path}")
+                return None
+            
+            # Check if image is already cached
+            for ext in ['.jpg', '.png']:
+                cached_path = self.image_cache_dir / f"{rating_key}_{img_type}{ext}"
+                if cached_path.exists():
+                    return str(cached_path)
+            
+            # Build API URL for image
+            url = f"{self.base_url}/api/v2?apikey={self.api_key}&cmd=pms_image_proxy&rating_key={rating_key}&img={img_type}"
+            return self._download_image(url, rating_key, img_type)
+        
+        return path
+
+    def _process_media_item(self, item):
+        """Process a media item to ensure all images are cached locally"""
+        if not isinstance(item, dict):
+            return item
+        
+        rating_key = item.get('rating_key')
+        if not rating_key:
+            return item
+        
+        # List of fields that might contain image paths
+        image_fields = [
+            ('thumb', 'thumb'),
+            ('art', 'art'),
+            ('banner', 'banner'),
+            ('parent_thumb', 'parent_thumb'),
+            ('grandparent_thumb', 'grandparent_thumb')
+        ]
+        
+        for field, img_type in image_fields:
+            if field in item and item[field]:
+                item[field] = self._process_image_path(item[field], rating_key)
+        
+        return item
+
     def get_recently_added(self, count=5):
         """Get recently added media"""
         # First try to get from API
         result = self._make_request("get_recently_added", count=count)
         if result and "response" in result:
             items = result["response"].get("data", {}).get("recently_added", [])
-            # Store in database
-            for item in items:
+            # Process items and store in database
+            processed_items = [self._process_media_item(item) for item in items]
+            for item in processed_items:
                 self.db.store_media_item(item)
-            return items
+            return processed_items
         
         # Fallback to database
         print("Falling back to database for recently added items")
@@ -152,10 +358,15 @@ class TautulliAPI:
                     else:
                         title = item.get('title', 'Unknown')
                     
+                    # Process image paths
+                    thumb = self._process_image_path(
+                        item.get('grandparent_thumb', item.get('thumb', ''))
+                    )
+                    
                     trending_items.append({
                         'title': title,
                         'year': item.get('year'),
-                        'thumb': item.get('grandparent_thumb', item.get('thumb', '')),
+                        'thumb': thumb,
                         'play_count': item.get('total_plays', 0),
                         'users_watched': item.get('users_watched', 0),
                         'media_type': media_type,
@@ -334,11 +545,11 @@ class TautulliAPI:
                 if item.get("media_type") == "episode":
                     key = f"show_{item.get('grandparent_rating_key', item.get('rating_key'))}"
                     title = item.get("grandparent_title", "Unknown Show")
-                    thumb = item.get("grandparent_thumb", "")
+                    thumb = self._process_image_path(item.get("grandparent_thumb", ""))
                 else:
                     key = f"movie_{item.get('rating_key')}"
                     title = item.get("title", "Unknown Movie")
-                    thumb = item.get("thumb", "")
+                    thumb = self._process_image_path(item.get("thumb", ""))
                 
                 # Store user who watched this item
                 user = item.get("friendly_name", "Unknown")

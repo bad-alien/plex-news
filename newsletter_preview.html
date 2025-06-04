@@ -3,16 +3,17 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Your Plex Weekly Digest</title>
+    <title>Blackbox Bulletin</title>
+    <link href="https://fonts.googleapis.com/css2?family=Expletus+Sans:wght@400;700&family=Metrophobic&display=swap" rel="stylesheet">
     <style>
         /* Reset styles for email clients */
         body {
             margin: 0;
             padding: 0;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            font-family: 'Metrophobic', sans-serif;
             line-height: 1.6;
-            color: #333;
-            background-color: #f4f4f4;
+            color: #E0E0E0;
+            background-color: #181818;
         }
 
         /* Container styles */
@@ -20,38 +21,72 @@
             max-width: 600px;
             margin: 0 auto;
             padding: 20px;
-            background-color: #ffffff;
+            background-color: #1F1F1F;
         }
 
         /* Header styles */
         .header {
-            text-align: center;
-            padding: 20px 0;
-            background-color: #e5a00d;
-            color: white;
+            padding: 20px;
+            background-color: #1F1F1F;
+            border-bottom: 1px solid #333333;
             border-radius: 8px 8px 0 0;
+            text-align: center;
         }
 
-        .header h1 {
+        .header-content {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .logo {
+            max-height: 80px;
+            margin-bottom: 15px;
+        }
+
+        .header-text {
+            text-align: center;
+        }
+
+        .header-text h1 {
+            margin: 0 0 5px 0;
+            font-size: 20px;
+            font-family: 'Expletus Sans', sans-serif;
+            color: #AAAAAA;
+        }
+
+        .header-text p {
             margin: 0;
-            font-size: 24px;
+            color: #999999;
+            font-size: 14px;
         }
 
         /* Section styles */
         .section {
             margin: 20px 0;
             padding: 15px;
-            background-color: #ffffff;
-            border: 1px solid #e1e1e1;
+            background-color: #252525;
+            border: 1px solid #333333;
             border-radius: 4px;
         }
 
         .section-title {
             color: #e5a00d;
             font-size: 20px;
+            font-family: 'Expletus Sans', sans-serif;
             margin-bottom: 15px;
             border-bottom: 2px solid #e5a00d;
             padding-bottom: 5px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .section-icon {
+            width: 24px;
+            height: 24px;
+            object-fit: contain;
+            filter: invert(1);
         }
 
         /* Media item styles */
@@ -59,8 +94,14 @@
             display: flex;
             margin-bottom: 15px;
             padding: 10px;
-            background-color: #f9f9f9;
+            background-color: #2A2A2A;
             border-radius: 4px;
+            transition: transform 0.2s ease;
+        }
+
+        .media-item:hover {
+            transform: translateX(5px);
+            background-color: #303030;
         }
 
         .media-poster {
@@ -69,6 +110,18 @@
             object-fit: cover;
             border-radius: 4px;
             margin-right: 15px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .media-poster.missing {
+            background-color: #333333;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #AAAAAA;
+            font-size: 12px;
+            text-align: center;
+            padding: 10px;
         }
 
         .media-info {
@@ -77,20 +130,25 @@
 
         .media-title {
             font-size: 18px;
+            font-family: 'Expletus Sans', sans-serif;
             font-weight: bold;
             margin: 0 0 5px 0;
-            color: #2c3e50;
+            color: #CCCCCC;
         }
 
         .media-meta {
             font-size: 14px;
-            color: #666;
+            color: #999999;
             margin-bottom: 10px;
         }
 
         .media-summary {
             font-size: 14px;
-            color: #666;
+            color: #AAAAAA;
+            display: -webkit-box;
+            -webkit-line-clamp: 3;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
         }
 
         .media-badge {
@@ -99,14 +157,24 @@
             border-radius: 12px;
             font-size: 12px;
             margin-right: 8px;
-            color: white;
+            color: #FFFFFF;
             background-color: #e5a00d;
         }
 
         .media-stats {
             margin-top: 8px;
             font-size: 14px;
-            color: #666;
+            color: #999999;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .media-stats-icon {
+            width: 16px;
+            height: 16px;
+            object-fit: contain;
+            filter: invert(0.7);
         }
 
         /* Stats section */
@@ -114,16 +182,22 @@
             display: flex;
             justify-content: space-between;
             flex-wrap: wrap;
+            gap: 15px;
         }
 
         .stat-box {
             flex: 1;
             min-width: 150px;
-            margin: 10px;
             padding: 15px;
-            background-color: #f9f9f9;
+            background-color: #2A2A2A;
             border-radius: 4px;
             text-align: center;
+            transition: transform 0.2s ease;
+        }
+
+        .stat-box:hover {
+            transform: translateY(-2px);
+            background-color: #303030;
         }
 
         .stat-number {
@@ -134,16 +208,26 @@
 
         .stat-label {
             font-size: 14px;
-            color: #666;
+            color: #999999;
+            margin-top: 5px;
         }
 
         /* Footer styles */
         .footer {
             text-align: center;
             padding: 20px;
-            color: #666;
+            color: #999999;
             font-size: 12px;
-            border-top: 1px solid #e1e1e1;
+            border-top: 1px solid #333333;
+            margin-top: 30px;
+        }
+
+        .footer-logo {
+            max-width: 100px;
+            height: auto;
+            margin: 0 auto 10px;
+            opacity: 0.7;
+            filter: invert(0.7);
         }
 
         /* Responsive design */
@@ -151,6 +235,16 @@
             .container {
                 width: 100%;
                 padding: 10px;
+            }
+
+            .header-content {
+                flex-direction: column;
+                text-align: center;
+            }
+
+            .logo {
+                margin-right: 0;
+                margin-bottom: 15px;
             }
 
             .media-item {
@@ -167,6 +261,10 @@
             .stat-box {
                 min-width: calc(50% - 20px);
             }
+
+            .stats-container {
+                gap: 10px;
+            }
         }
     </style>
 </head>
@@ -174,31 +272,35 @@
     <div class="container">
         <!-- Header -->
         <div class="header">
-            <h1>Your Plex Weekly Digest</h1>
-            <p>May 25 - June 01, 2025</p>
+            <div class="header-content">
+                
+                <img src="assets/images/logo.png" alt="blackbox alexandria logo" class="logo">
+                
+                <div class="header-text">
+                    <h1>From the Archives</h1>
+                    <p>May 28 - June 04, 2025</p>
+                </div>
+            </div>
         </div>
 
         <!-- Recently Added Section -->
         <div class="section">
-            <h2 class="section-title">📺 Recently Added</h2>
+            <h2 class="section-title">
+                <img src="assets/images/recently-added.png" alt="📺" class="section-icon">
+                Recently Added
+            </h2>
             
             <div class="media-item">
                 
-                <img class="media-poster" src="/library/metadata/22185/thumb/1748792054" alt="Dogtown and Z-Boys">
+                <div class="media-poster missing">
+                    No Poster Available
+                </div>
                 
                 <div class="media-info">
-                    <h3 class="media-title">Dogtown and Z-Boys</h3>
+                    <h3 class="media-title">Season 5</h3>
                     <div class="media-meta">
                         
-                        <span>2001</span> •
                         
-                        
-                        <span>5458486</span>
-                        
-                    </div>
-                    
-                    <div class="media-summary">
-                        This award-winning, thrilling story is about a group of discarded kids who revolutionized skateboarding and shaped the attitude and culture of modern day extreme sports. Featuring old skool skating footage, exclusive interviews and a blistering rock soundtrack, DOGTOWN AND Z-BOYS captures the rise of the Zephyr skateboarding team from Venice's Dogtown, a tough "locals only" beach with a legacy of outlaw surfing.
                     </div>
                     
                 </div>
@@ -206,21 +308,71 @@
             
             <div class="media-item">
                 
-                <img class="media-poster" src="/library/metadata/22180/thumb/1748790274" alt="No Other Land">
+                <div class="media-poster missing">
+                    No Poster Available
+                </div>
                 
                 <div class="media-info">
-                    <h3 class="media-title">No Other Land</h3>
+                    <h3 class="media-title">Party Down</h3>
                     <div class="media-meta">
                         
-                        <span>2024</span> •
+                        <span>2009</span> •
                         
                         
-                        <span>5751978</span>
+                        <span>1800000</span>
                         
                     </div>
                     
                     <div class="media-summary">
-                        This film made by a Palestinian-Israeli collective shows the destruction of the occupied West Bank's Masafer Yatta by Israeli soldiers and the alliance which develops between the Palestinian activist Basel and Israeli journalist Yuval.
+                        A group of actors move to Los Angeles to make it big, but end up working as caterers.
+                    </div>
+                    
+                </div>
+            </div>
+            
+            <div class="media-item">
+                
+                <div class="media-poster missing">
+                    No Poster Available
+                </div>
+                
+                <div class="media-info">
+                    <h3 class="media-title">An Idiot Abroad</h3>
+                    <div class="media-meta">
+                        
+                        <span>2010</span> •
+                        
+                        
+                        <span>2580000</span>
+                        
+                    </div>
+                    
+                    <div class="media-summary">
+                        An Idiot Abroad is a British travel documentary television series broadcast on Sky1 and Science, as well as spin-off books published by Canongate Books, created by Ricky Gervais and Stephen Merchant and starring Karl Pilkington. The ongoing theme of both the television series and the books is that Pilkington has no interest in global travel, so Merchant and Gervais make him travel while they stay in the United Kingdom and monitor his progress.
+                    </div>
+                    
+                </div>
+            </div>
+            
+            <div class="media-item">
+                
+                <div class="media-poster missing">
+                    No Poster Available
+                </div>
+                
+                <div class="media-info">
+                    <h3 class="media-title">Anthony Bourdain: No Reservations</h3>
+                    <div class="media-meta">
+                        
+                        <span>2005</span> •
+                        
+                        
+                        <span>2700000</span>
+                        
+                    </div>
+                    
+                    <div class="media-summary">
+                        Anthony Bourdain uncovers the best cuisine across the world. At each location, Tony dives headfirst into life's colorful and rich pageant, bringing his intellectual curiosity, empathy, wit and boundless appetite.
                     </div>
                     
                 </div>
@@ -230,25 +382,36 @@
 
         <!-- Popular Content Section -->
         <div class="section">
-            <h2 class="section-title">🔥 Trending This Week</h2>
+            <h2 class="section-title">
+                <img src="assets/images/trending.png" alt="🔥" class="section-icon">
+                Trending This Week
+            </h2>
             
         </div>
 
         <!-- Most Watched By Users Section -->
         <div class="section">
-            <h2 class="section-title">👥 Community Favorites</h2>
+            <h2 class="section-title">
+                <img src="assets/images/community.png" alt="👥" class="section-icon">
+                Community Favorites
+            </h2>
             
             <div class="media-item">
+                
+                <div class="media-poster missing">
+                    No Poster Available
+                </div>
                 
                 <div class="media-info">
                     <h3 class="media-title">Mad Men</h3>
                     <div class="media-meta">
                         
-                        <span>2015</span> •
+                        <span>2008</span> •
                         
                         <span class="media-badge">TV Show</span>
                     </div>
                     <div class="media-stats">
+                        <img src="assets/images/users.png" alt="👥" class="media-stats-icon">
                         Watched by <strong>2</strong> different users
                     </div>
                 </div>
@@ -258,26 +421,29 @@
 
         <!-- User Stats Section -->
         <div class="section">
-            <h2 class="section-title">📊 User Activity</h2>
+            <h2 class="section-title">
+                <img src="assets/images/stats.png" alt="📊" class="section-icon">
+                User Activity
+            </h2>
             <div class="stats-container">
                 
                 <div class="stat-box">
-                    <div class="stat-number">364</div>
+                    <div class="stat-number">456</div>
                     <div class="stat-label">Total Plays</div>
                 </div>
                 
                 <div class="stat-box">
-                    <div class="stat-number">63h 24m</div>
+                    <div class="stat-number">65h 41m</div>
                     <div class="stat-label">Watch Time</div>
                 </div>
                 
                 <div class="stat-box">
-                    <div class="stat-number">9</div>
+                    <div class="stat-number">10</div>
                     <div class="stat-label">Active Users</div>
                 </div>
                 
                 <div class="stat-box">
-                    <div class="stat-number">jac7k (130 plays)</div>
+                    <div class="stat-number">jac7k (147 plays)</div>
                     <div class="stat-label">Most Active User</div>
                 </div>
                 
@@ -286,8 +452,11 @@
 
         <!-- Footer -->
         <div class="footer">
-            <p>Generated for Your Plex Server • June 01, 2025</p>
-            <p>Powered by Plex & Tautulli</p>
+            
+            <img src="assets/images/logo.png" alt="Blackbox Alexandria" class="footer-logo">
+            
+            <p>Generated for Blackbox Alexandria • June 04, 2025</p>
+            <p>Powered by Bad Alien</p>
         </div>
     </div>
 </body>
