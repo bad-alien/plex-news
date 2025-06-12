@@ -171,59 +171,94 @@ class Database:
         
         cursor = self._connection.cursor()
         try:
-            # For TV shows, we want to store both show and episode info
-            if item.get('media_type') == 'episode':
-                # Store the show
+            media_type = item.get('media_type')
+
+            # For TV shows, we want to store show, season, and episode info
+            if media_type == 'episode':
+                # Store the parent show
                 show_key = f"show_{item.get('grandparent_rating_key', '')}"
                 self.execute_with_retry(cursor, """
-                    INSERT OR REPLACE INTO media_items (
-                        rating_key, title, year, media_type, 
-                        thumb, thumb_cached_path,
-                        art, art_cached_path,
-                        banner, banner_cached_path,
-                        updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT OR IGNORE INTO media_items (
+                        rating_key, title, year, media_type, updated_at
+                    ) VALUES (?, ?, ?, ?, ?)
                 """, (
                     show_key,
                     item.get('grandparent_title', 'Unknown Show'),
                     item.get('year'),
                     'show',
-                    item.get('grandparent_thumb', ''),
-                    item.get('grandparent_thumb_cached', ''),
-                    item.get('grandparent_art', ''),
-                    item.get('grandparent_art_cached', ''),
-                    item.get('grandparent_banner', ''),
-                    item.get('grandparent_banner_cached', ''),
                     int(datetime.now().timestamp())
                 ))
-                
-                # Store the episode
+
+                # Store the parent season
+                season_key = f"season_{item.get('parent_rating_key')}"
+                self.execute_with_retry(cursor, """
+                    INSERT OR IGNORE INTO media_items (
+                        rating_key, title, year, media_type, added_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                """, (
+                    season_key,
+                    item.get('parent_title', 'Unknown Season'),
+                    item.get('year'),
+                    'season',
+                    int(item.get('added_at', 0)),
+                    int(datetime.now().timestamp())
+                ))
+
+                # Store the episode itself
                 self.execute_with_retry(cursor, """
                     INSERT OR REPLACE INTO media_items (
                         rating_key, title, year, media_type,
-                        thumb, thumb_cached_path,
-                        art, art_cached_path,
-                        banner, banner_cached_path,
-                        duration, summary, added_at, updated_at
+                        thumb, thumb_cached_path, art, art_cached_path,
+                        banner, banner_cached_path, duration, summary, 
+                        added_at, updated_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    item.get('rating_key'),
-                    item.get('title'),
-                    item.get('year'),
-                    'episode',
-                    item.get('thumb', ''),
-                    item.get('thumb_cached', ''),
-                    item.get('art', ''),
-                    item.get('art_cached', ''),
-                    item.get('banner', ''),
-                    item.get('banner_cached', ''),
-                    item.get('duration', 0),
-                    item.get('summary', ''),
+                    item.get('rating_key'), item.get('title'), item.get('year'),
+                    'episode', item.get('thumb', ''), item.get('thumb_cached', ''),
+                    item.get('art', ''), item.get('art_cached', ''),
+                    item.get('banner', ''), item.get('banner_cached', ''),
+                    item.get('duration', 0), item.get('summary', ''),
                     int(item.get('added_at', datetime.now().timestamp())),
                     int(datetime.now().timestamp())
                 ))
+
+            # For music, we want to store album and track info
+            elif media_type == 'track':
+                # Store the parent album
+                album_key = f"album_{item.get('parent_rating_key')}"
+                self.execute_with_retry(cursor, """
+                    INSERT OR IGNORE INTO media_items (
+                        rating_key, title, year, media_type, added_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                """, (
+                    album_key,
+                    item.get('parent_title', 'Unknown Album'),
+                    item.get('year'),
+                    'album',
+                    int(item.get('added_at', 0)),
+                    int(datetime.now().timestamp())
+                ))
+
+                # Store the track itself
+                self.execute_with_retry(cursor, """
+                    INSERT OR REPLACE INTO media_items (
+                        rating_key, title, year, media_type,
+                        thumb, thumb_cached_path, art, art_cached_path,
+                        banner, banner_cached_path, duration, summary, 
+                        added_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    item.get('rating_key'), item.get('title'), item.get('year'),
+                    'track', item.get('thumb', ''), item.get('thumb_cached', ''),
+                    item.get('art', ''), item.get('art_cached', ''),
+                    item.get('banner', ''), item.get('banner_cached', ''),
+                    item.get('duration', 0), item.get('summary', ''),
+                    int(item.get('added_at', datetime.now().timestamp())),
+                    int(datetime.now().timestamp())
+                ))
+
             else:
-                # Store movie or music
+                # Store movie or other media types
                 self.execute_with_retry(cursor, """
                     INSERT OR REPLACE INTO media_items (
                         rating_key, title, year, media_type,
@@ -438,4 +473,101 @@ class Database:
                 "total_duration": overall_stats["total_duration"] // 60,  # Convert to minutes
                 "active_users": overall_stats["active_users"],
                 "user_stats": user_stats
-            } 
+            }
+
+    def get_all_history(self, days=None):
+        """Get all play history from database, optionally filtered by days"""
+        with self.get_connection(new_connection=True) as conn:
+            cursor = conn.cursor()
+            
+            if days:
+                # Calculate timestamp for X days ago
+                cutoff_timestamp = int((datetime.now().timestamp() - (days * 24 * 60 * 60)))
+                query = """
+                    SELECT 
+                        ph.rating_key,
+                        ph.user_id,
+                        ph.watched_at as date,
+                        ph.duration,
+                        mi.title,
+                        mi.media_type,
+                        mi.year,
+                        u.friendly_name
+                    FROM play_history ph
+                    LEFT JOIN media_items mi ON ph.rating_key = mi.rating_key
+                    LEFT JOIN users u ON ph.user_id = u.user_id
+                    WHERE ph.watched_at >= ?
+                    ORDER BY ph.watched_at DESC
+                """
+                self.execute_with_retry(cursor, query, (cutoff_timestamp,))
+            else:
+                query = """
+                    SELECT 
+                        ph.rating_key,
+                        ph.user_id,
+                        ph.watched_at as date,
+                        ph.duration,
+                        mi.title,
+                        mi.media_type,
+                        mi.year,
+                        u.friendly_name
+                    FROM play_history ph
+                    LEFT JOIN media_items mi ON ph.rating_key = mi.rating_key
+                    LEFT JOIN users u ON ph.user_id = u.user_id
+                    ORDER BY ph.watched_at DESC
+                """
+                self.execute_with_retry(cursor, query)
+            
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    def get_user_stats_by_media(self, days=30):
+        """Get user statistics broken down by media type from database"""
+        with self.get_connection(new_connection=True) as conn:
+            cursor = conn.cursor()
+            
+            # Calculate timestamp for X days ago
+            cutoff_timestamp = int((datetime.now().timestamp() - (days * 24 * 60 * 60)))
+            
+            query = """
+                SELECT 
+                    u.friendly_name,
+                    mi.media_type,
+                    COUNT(*) as total_plays,
+                    SUM(ph.duration) / 60 as duration
+                FROM play_history ph
+                LEFT JOIN media_items mi ON ph.rating_key = mi.rating_key
+                LEFT JOIN users u ON ph.user_id = u.user_id
+                WHERE ph.watched_at >= ?
+                AND mi.media_type IS NOT NULL
+                AND u.friendly_name IS NOT NULL
+                GROUP BY u.friendly_name, mi.media_type
+                HAVING total_plays > 0
+                ORDER BY u.friendly_name, mi.media_type
+            """
+            
+            self.execute_with_retry(cursor, query, (cutoff_timestamp,))
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    def get_all_media_items(self):
+        """Get all media items from database for content growth analysis"""
+        with self.get_connection(new_connection=True) as conn:
+            cursor = conn.cursor()
+            
+            query = """
+                SELECT 
+                    title,
+                    media_type as section_type,
+                    added_at,
+                    year
+                FROM media_items
+                WHERE added_at IS NOT NULL
+                AND added_at > 0
+                AND media_type IN ('movie', 'season', 'album')
+                ORDER BY added_at ASC
+            """
+            
+            self.execute_with_retry(cursor, query)
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows] 

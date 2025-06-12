@@ -9,7 +9,7 @@ import shutil
 from PIL import Image, ImageDraw, ImageFont
 
 # Load environment variables
-load_dotenv()
+load_dotenv(override=True)
 
 class TautulliAPI:
     def __init__(self):
@@ -118,7 +118,7 @@ class TautulliAPI:
                 
                 if plex_url and plex_token:
                     # Get metadata to find the correct image path
-                    metadata_result = self._make_request("get_metadata", rating_key=rating_key)
+                    metadata_result = self._make_request("get_metadata")
                     if metadata_result and "response" in metadata_result:
                         metadata = metadata_result["response"].get("data", {})
                         
@@ -583,4 +583,184 @@ class TautulliAPI:
         
         # Fallback to database
         print("Falling back to database for most watched items")
-        return self.db.get_most_watched(days=days, media_types=['movie', 'show', 'episode']) 
+        return self.db.get_most_watched(days=days, media_types=['movie', 'show', 'episode'])
+
+    def get_play_history(self, days=None, start_date=None, end_date=None):
+        """
+        Get detailed play history for visualization.
+        
+        Args:
+            days (int, optional): Number of days of history to fetch
+            start_date (str, optional): Start date in YYYY-MM-DD format
+            end_date (str, optional): End date in YYYY-MM-DD format
+            
+        Returns:
+            list: List of play history entries
+        """
+        params = {
+            "length": 10000  # Get a large number of records
+        }
+        
+        if days:
+            params["days"] = days
+        elif start_date and end_date:
+            params["start_date"] = start_date
+            params["end_date"] = end_date
+        
+        response = self._make_request("get_history", **params)
+        if response and "response" in response:
+            return response["response"].get("data", {}).get("data", [])
+        return []
+
+    def get_library_stats(self):
+        """
+        Get library statistics for content growth visualization.
+        
+        Returns:
+            list: List of library items with added dates
+        """
+        # First get all library sections
+        sections = self._make_request("get_libraries")
+        if not sections or "response" not in sections:
+            return []
+        
+        all_items = []
+        for section in sections["response"]["data"]:
+            section_id = section["section_id"]
+            section_type = section["section_type"]
+            
+            # Get recently added for each section (this gives us add dates)
+            # Use a large count to get as much history as possible
+            items = self._make_request("get_recently_added", section_id=section_id, count=10000)
+            if items and "response" in items:
+                recently_added = items["response"].get("data", {}).get("recently_added", [])
+                for item in recently_added:
+                    if item.get("added_at"):
+                        all_items.append({
+                            "title": item.get("title"),
+                            "section_type": section_type,  # Use section_type for consistency
+                            "added_at": item.get("added_at"),
+                            "section": section["section_name"]
+                        })
+        
+        return all_items
+
+    def get_user_stats_by_media(self, days=30):
+        """
+        Get user statistics broken down by media type.
+        
+        Args:
+            days (int): Number of days to analyze
+            
+        Returns:
+            list: List of user activity records
+        """
+        # Get all users first
+        users_response = self._make_request("get_users")
+        if not users_response or "response" not in users_response:
+            return []
+        
+        user_stats = []
+        for user in users_response["response"]["data"]:
+            # Get detailed history for each user
+            history = self._make_request("get_history", user_id=user["user_id"], days=days, length=1000)
+            if history and "response" in history and "data" in history["response"]:
+                history_data = history["response"]["data"]
+                if isinstance(history_data, dict) and "data" in history_data:
+                    history_items = history_data["data"]
+                elif isinstance(history_data, list):
+                    history_items = history_data
+                else:
+                    continue
+                
+                # Group by media type
+                media_types = {}
+                for item in history_items:
+                    if not isinstance(item, dict):
+                        continue
+                    
+                    media_type = item.get("media_type", "unknown")
+                    duration = int(item.get("duration", 0) or 0) // 60  # Convert to minutes
+                    
+                    if media_type not in media_types:
+                        media_types[media_type] = {
+                            "plays": 0,
+                            "duration": 0
+                        }
+                    media_types[media_type]["plays"] += 1
+                    media_types[media_type]["duration"] += duration
+                
+                # Add records for each media type that has activity
+                for media_type, stats in media_types.items():
+                    if stats["plays"] > 0:  # Only include media types with activity
+                        user_stats.append({
+                            "friendly_name": user["friendly_name"],
+                            "media_type": media_type,
+                            "total_plays": stats["plays"],
+                            "duration": stats["duration"]
+                        })
+        
+        return user_stats
+
+    def full_library_sync(self):
+        """Perform a full sync of all libraries from Tautulli."""
+        print("Starting full library sync. This may take a while...")
+        try:
+            # Get all library sections
+            sections_result = self._make_request("get_libraries")
+            if not sections_result or "response" not in sections_result:
+                print("Error: Could not fetch library sections.")
+                return False
+            
+            libraries = sections_result["response"]["data"]
+            print(f"Found {len(libraries)} libraries to sync.")
+
+            self.db.begin_transaction()
+            total_items_synced = 0
+
+            for lib in libraries:
+                section_id = lib['section_id']
+                section_name = lib['section_name']
+                media_type = lib['section_type'] # Get the media type for the section
+                print(f"Syncing library: {section_name} (Type: {media_type})...")
+
+                offset = 0
+                page_size = 200 # Fetch in pages
+                while True:
+                    media_result = self._make_request(
+                        "get_library_media", 
+                        section_id=section_id,
+                        media_type=media_type, # Add the required media_type parameter
+                        start=offset,
+                        length=page_size
+                    )
+                    
+                    if not media_result or "response" not in media_result:
+                        print(f"Warning: Failed to fetch media for {section_name}.")
+                        break
+                        
+                    data = media_result["response"].get("data", {})
+                    media_list = data.get("data", [])
+                    
+                    if not media_list:
+                        break # No more items in this library
+
+                    for item in media_list:
+                        self.db.store_media_item(item)
+                    
+                    total_items_synced += len(media_list)
+                    print(f"  ... synced {total_items_synced} items so far.", end='\r')
+
+                    if len(media_list) < page_size:
+                        break # Last page
+                    
+                    offset += page_size
+            
+            self.db.commit_transaction()
+            print(f"\nFull library sync completed. Synced a total of {total_items_synced} items.")
+            return True
+
+        except Exception as e:
+            print(f"\nAn error occurred during full library sync: {e}")
+            self.db.rollback_transaction()
+            return False 

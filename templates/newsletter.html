@@ -63,11 +63,10 @@
 
         /* Section styles */
         .section {
-            margin: 20px 0;
-            padding: 15px;
-            background-color: #252525;
-            border: 1px solid #333333;
-            border-radius: 4px;
+            margin: 2em 0;
+            padding: 1em;
+            background: #f8f9fa;
+            border-radius: 8px;
         }
 
         .section-title {
@@ -87,6 +86,23 @@
             height: 24px;
             object-fit: contain;
             filter: invert(1);
+        }
+
+        .section img {
+            display: block;
+            margin: 1em auto;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            border-radius: 4px;
+        }
+
+        .section h2 {
+            color: #2c3e50;
+            margin-bottom: 0.5em;
+        }
+
+        .section p {
+            color: #34495e;
+            margin-bottom: 1em;
         }
 
         /* Media item styles */
@@ -397,6 +413,27 @@
                 </div>
                 {% endfor %}
             </div>
+        </div>
+
+        <!-- Server Usage Patterns -->
+        <div class="section">
+            <h2>Server Usage Patterns</h2>
+            <p>Here's when your Plex server is most active throughout the week:</p>
+            <img src="{{ usage_density_path }}" alt="Server Usage Patterns" style="width: 100%; max-width: 800px;">
+        </div>
+
+        <!-- User Activity Analysis -->
+        <div class="section">
+            <h2>User Activity Analysis</h2>
+            <p>See how different users engage with various types of content:</p>
+            <img src="{{ user_scatter_path }}" alt="User Content Activity" style="width: 100%; max-width: 800px;">
+        </div>
+
+        <!-- Library Growth -->
+        <div class="section">
+            <h2>Library Growth</h2>
+            <p>Watch your Plex library grow over time:</p>
+            <img src="{{ growth_line_path }}" alt="Content Growth Over Time" style="width: 100%; max-width: 800px;">
         </div>
 
         <!-- Footer -->
