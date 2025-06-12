@@ -52,6 +52,8 @@ def generate_newsletter(force_sync=False, force_full_sync=False, design_mode=Fal
         if force_full_sync:
             print("Forcing a full library sync from Tautulli...")
             api.full_library_sync()
+            print("Forcing a full history sync from Tautulli...")
+            api.sync_data(force_full_sync=True)
         elif force_sync:
             print("Forcing an incremental data sync from Tautulli...")
             api.sync_data()
@@ -94,8 +96,8 @@ def generate_newsletter(force_sync=False, force_full_sync=False, design_mode=Fal
         user_scatter_path = create_user_content_scatter(user_stats)
         print("Created user content scatter plot")
         
-        # Generate content growth line plot
-        library_stats = api.get_library_stats()
+        # Generate content growth line plot using the accurate, synced database
+        library_stats = api.db.get_all_media_items()
         growth_line_path = create_content_growth_line(library_stats)
         print("Created content growth line plot")
 

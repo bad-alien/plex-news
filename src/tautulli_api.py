@@ -612,39 +612,6 @@ class TautulliAPI:
             return response["response"].get("data", {}).get("data", [])
         return []
 
-    def get_library_stats(self):
-        """
-        Get library statistics for content growth visualization.
-        
-        Returns:
-            list: List of library items with added dates
-        """
-        # First get all library sections
-        sections = self._make_request("get_libraries")
-        if not sections or "response" not in sections:
-            return []
-        
-        all_items = []
-        for section in sections["response"]["data"]:
-            section_id = section["section_id"]
-            section_type = section["section_type"]
-            
-            # Get recently added for each section (this gives us add dates)
-            # Use a large count to get as much history as possible
-            items = self._make_request("get_recently_added", section_id=section_id, count=10000)
-            if items and "response" in items:
-                recently_added = items["response"].get("data", {}).get("recently_added", [])
-                for item in recently_added:
-                    if item.get("added_at"):
-                        all_items.append({
-                            "title": item.get("title"),
-                            "section_type": section_type,  # Use section_type for consistency
-                            "added_at": item.get("added_at"),
-                            "section": section["section_name"]
-                        })
-        
-        return all_items
-
     def get_user_stats_by_media(self, days=30):
         """
         Get user statistics broken down by media type.
@@ -706,7 +673,9 @@ class TautulliAPI:
         """Perform a full sync of all libraries from Tautulli."""
         print("Starting full library sync. This may take a while...")
         try:
-            # Get all library sections
+            # Clear the database for a truly fresh start
+            self.db.clear_all_data()
+
             sections_result = self._make_request("get_libraries")
             if not sections_result or "response" not in sections_result:
                 print("Error: Could not fetch library sections.")
@@ -716,51 +685,132 @@ class TautulliAPI:
             print(f"Found {len(libraries)} libraries to sync.")
 
             self.db.begin_transaction()
-            total_items_synced = 0
-
+            
             for lib in libraries:
                 section_id = lib['section_id']
                 section_name = lib['section_name']
-                media_type = lib['section_type'] # Get the media type for the section
-                print(f"Syncing library: {section_name} (Type: {media_type})...")
+                section_type = lib['section_type']
+                
+                print(f"--- Syncing '{section_name}' (Type: {section_type}) ---")
 
-                offset = 0
-                page_size = 200 # Fetch in pages
-                while True:
-                    media_result = self._make_request(
-                        "get_library_media", 
-                        section_id=section_id,
-                        media_type=media_type, # Add the required media_type parameter
-                        start=offset,
-                        length=page_size
-                    )
-                    
-                    if not media_result or "response" not in media_result:
-                        print(f"Warning: Failed to fetch media for {section_name}.")
-                        break
-                        
-                    data = media_result["response"].get("data", {})
-                    media_list = data.get("data", [])
-                    
-                    if not media_list:
-                        break # No more items in this library
+                if section_type == 'movie':
+                    self._sync_movie_library(section_id)
+                elif section_type == 'show':
+                    self._sync_show_library(section_id)
+                elif section_type == 'artist':
+                    self._sync_music_library(section_id)
+                else:
+                    print(f"Skipping unsupported library type: {section_type}")
 
-                    for item in media_list:
-                        self.db.store_media_item(item)
-                    
-                    total_items_synced += len(media_list)
-                    print(f"  ... synced {total_items_synced} items so far.", end='\r')
-
-                    if len(media_list) < page_size:
-                        break # Last page
-                    
-                    offset += page_size
-            
             self.db.commit_transaction()
-            print(f"\nFull library sync completed. Synced a total of {total_items_synced} items.")
+            print("\nFull library sync completed.")
             return True
 
         except Exception as e:
             print(f"\nAn error occurred during full library sync: {e}")
+            import traceback
+            traceback.print_exc()
             self.db.rollback_transaction()
-            return False 
+            return False
+
+    def _sync_movie_library(self, section_id):
+        """Sync all movies from a specific library section."""
+        offset = 0
+        total_synced = 0
+        while True:
+            media_result = self._make_request("get_library_media_info", section_id=section_id, start=offset, length=200)
+            if not (data := media_result.get("response", {}).get("data", {})) or not (media_list := data.get("data", [])):
+                break
+
+            for item in media_list:
+                if item.get('media_type') == 'movie':
+                    self.db.store_media_item(item)
+                    total_synced += 1
+            
+            print(f"  Synced {total_synced} movies...", end='\r')
+
+            if len(media_list) < 200:
+                break
+            offset += 200
+        print(f"  Finished syncing {total_synced} movies.")
+
+    def _sync_show_library(self, section_id):
+        """Sync all shows and their seasons from a TV library."""
+        shows_result = self._make_request("get_library_media_info", section_id=section_id, length=10000)
+        if not (all_items := shows_result.get("response", {}).get("data", {}).get("data", [])):
+            print("  No items found in this library.")
+            return
+        
+        shows = [item for item in all_items if item.get('media_type') == 'show']
+        print(f"  Found {len(shows)} shows. Now fetching seasons...")
+        total_seasons = 0
+
+        for i, show in enumerate(shows):
+            self.db.store_media_item(show)
+
+            # 2. Get seasons for the show
+            seasons_result = self._make_request("get_children_metadata", rating_key=show['rating_key'])
+            if not (seasons := seasons_result.get("response", {}).get("data", {}).get("children_list", [])):
+                continue
+
+            for season in seasons:
+                season['media_type'] = 'season' # API response doesn't include this
+
+                # 3. Get episodes to find the season's true 'added_at' date
+                episodes_result = self._make_request("get_children_metadata", rating_key=season['rating_key'])
+                episodes = episodes_result.get('response', {}).get('data', {}).get('children_list', [])
+                
+                earliest_added_at = min(
+                    (int(ep.get('added_at')) for ep in episodes if ep.get('added_at')),
+                    default=None
+                )
+                
+                if earliest_added_at:
+                    season['added_at'] = earliest_added_at
+                
+                self.db.store_media_item(season)
+                total_seasons += 1
+            
+            print(f"  Processed {i+1}/{len(shows)} shows, found {total_seasons} seasons so far...", end='\r')
+        
+        print(f"\n  Finished syncing {total_seasons} seasons from {len(shows)} shows.")
+
+    def _sync_music_library(self, section_id):
+        """Sync all albums from a music library."""
+        artists_result = self._make_request("get_library_media_info", section_id=section_id, length=20000)
+        if not (all_artists := artists_result.get("response", {}).get("data", {}).get("data", [])):
+            print("  No artists found in this library.")
+            return
+        
+        artists = [item for item in all_artists if item.get('media_type') == 'artist']
+        print(f"  Found {len(artists)} artists. Now fetching albums...")
+        total_albums = 0
+        
+        for i, artist in enumerate(artists):
+            # 2. Get albums for the artist
+            albums_result = self._make_request("get_children_metadata", rating_key=artist['rating_key'])
+            if not (albums := albums_result.get('response', {}).get('data', {}).get('children_list', [])):
+                continue
+            
+            for album in albums:
+                if album.get('media_type') != 'album':
+                    continue
+
+                # 3. Get tracks to find the album's true 'added_at' date
+                tracks_result = self._make_request("get_children_metadata", rating_key=album['rating_key'])
+                tracks = tracks_result.get('response', {}).get('data', {}).get('children_list', [])
+                
+                earliest_added_at = min(
+                    (int(tr.get('added_at')) for tr in tracks if tr.get('added_at')),
+                    default=None
+                )
+                
+                if earliest_added_at:
+                    album['added_at'] = earliest_added_at
+                    
+                self.db.store_media_item(album)
+                total_albums += 1
+
+            print(f"  Processed {i+1}/{len(artists)} artists, found {total_albums} albums so far...", end='\r')
+            
+        print(f"\n  Finished syncing {total_albums} albums from {len(artists)} artists.") 

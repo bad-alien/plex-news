@@ -249,26 +249,26 @@ def create_content_growth_line(library_data):
     # Calculate cumulative sums
     cumulative = daily_adds.cumsum()
     
-    # Calculate the total based on the specified columns
+    # Add a 'Total' column
     cumulative['Total'] = cumulative[['Movies', 'TV Seasons', 'Music Albums']].sum(axis=1)
-    
+
     # Create the plot
+    plt.style.use('seaborn-v0_8-whitegrid')
     plt.figure(figsize=(12, 6))
     
     # Plot each content type
-    for column in cumulative.columns:
-        if column == 'Total':
-            plt.plot(cumulative.index, cumulative[column], 
-                    label=column, linewidth=3, color='black')
-        else:
-            plt.plot(cumulative.index, cumulative[column], 
-                    label=column, linewidth=2, alpha=0.7)
-    
-    plt.title('Library Growth Over Time', fontsize=16)
-    plt.xlabel('Date')
-    plt.ylabel('Number of Items')
+    for column in ['Movies', 'TV Seasons', 'Music Albums', 'Total']:
+        plt.plot(cumulative.index, cumulative[column], label=column, lw=2 if column == 'Total' else 1.5)
+
+    # Set the x-axis to start from March of the current year and end today.
+    today = pd.to_datetime('today')
+    start_date = pd.to_datetime(f'{today.year}-03-01')
+    plt.xlim(left=start_date, right=today)
+
+    plt.title('Library Growth Over Time', fontsize=16, pad=20)
+    plt.xlabel('Date Added')
+    plt.ylabel('Total Count')
     plt.legend()
-    plt.grid(True, alpha=0.3)
     
     # Save and return path
     plot_path = 'assets/images/content_growth_line.png'

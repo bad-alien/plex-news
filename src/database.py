@@ -132,6 +132,19 @@ class Database:
             
             conn.commit()
 
+    def clear_all_data(self):
+        """Deletes all records from media_items, play_history, and users."""
+        print("Clearing all existing data from the database for a fresh sync...")
+        with self.get_connection(new_connection=True) as conn:
+            cursor = conn.cursor()
+            self.execute_with_retry(cursor, "DELETE FROM media_items")
+            self.execute_with_retry(cursor, "DELETE FROM play_history")
+            self.execute_with_retry(cursor, "DELETE FROM users")
+            # Reset sync status as well, but keep the row
+            self.execute_with_retry(cursor, "UPDATE sync_status SET last_history_sync = 0, last_library_sync = 0, total_items_synced = 0 WHERE id = 1")
+            conn.commit()
+        print("Database cleared.")
+
     def get_last_sync_time(self):
         """Get the timestamp of the last successful sync"""
         with self.get_connection(new_connection=True) as conn:
@@ -165,131 +178,37 @@ class Database:
         )
 
     def store_media_item(self, item):
-        """Store a media item in the database"""
+        """Store a media item in the database using INSERT OR REPLACE."""
         if self._connection is None:
             self.begin_transaction()
         
         cursor = self._connection.cursor()
         try:
-            media_type = item.get('media_type')
-
-            # For TV shows, we want to store show, season, and episode info
-            if media_type == 'episode':
-                # Store the parent show
-                show_key = f"show_{item.get('grandparent_rating_key', '')}"
-                self.execute_with_retry(cursor, """
-                    INSERT OR IGNORE INTO media_items (
-                        rating_key, title, year, media_type, updated_at
-                    ) VALUES (?, ?, ?, ?, ?)
-                """, (
-                    show_key,
-                    item.get('grandparent_title', 'Unknown Show'),
-                    item.get('year'),
-                    'show',
-                    int(datetime.now().timestamp())
-                ))
-
-                # Store the parent season
-                season_key = f"season_{item.get('parent_rating_key')}"
-                self.execute_with_retry(cursor, """
-                    INSERT OR IGNORE INTO media_items (
-                        rating_key, title, year, media_type, added_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?)
-                """, (
-                    season_key,
-                    item.get('parent_title', 'Unknown Season'),
-                    item.get('year'),
-                    'season',
-                    int(item.get('added_at', 0)),
-                    int(datetime.now().timestamp())
-                ))
-
-                # Store the episode itself
-                self.execute_with_retry(cursor, """
-                    INSERT OR REPLACE INTO media_items (
-                        rating_key, title, year, media_type,
-                        thumb, thumb_cached_path, art, art_cached_path,
-                        banner, banner_cached_path, duration, summary, 
-                        added_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    item.get('rating_key'), item.get('title'), item.get('year'),
-                    'episode', item.get('thumb', ''), item.get('thumb_cached', ''),
-                    item.get('art', ''), item.get('art_cached', ''),
-                    item.get('banner', ''), item.get('banner_cached', ''),
-                    item.get('duration', 0), item.get('summary', ''),
-                    int(item.get('added_at', datetime.now().timestamp())),
-                    int(datetime.now().timestamp())
-                ))
-
-            # For music, we want to store album and track info
-            elif media_type == 'track':
-                # Store the parent album
-                album_key = f"album_{item.get('parent_rating_key')}"
-                self.execute_with_retry(cursor, """
-                    INSERT OR IGNORE INTO media_items (
-                        rating_key, title, year, media_type, added_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?)
-                """, (
-                    album_key,
-                    item.get('parent_title', 'Unknown Album'),
-                    item.get('year'),
-                    'album',
-                    int(item.get('added_at', 0)),
-                    int(datetime.now().timestamp())
-                ))
-
-                # Store the track itself
-                self.execute_with_retry(cursor, """
-                    INSERT OR REPLACE INTO media_items (
-                        rating_key, title, year, media_type,
-                        thumb, thumb_cached_path, art, art_cached_path,
-                        banner, banner_cached_path, duration, summary, 
-                        added_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    item.get('rating_key'), item.get('title'), item.get('year'),
-                    'track', item.get('thumb', ''), item.get('thumb_cached', ''),
-                    item.get('art', ''), item.get('art_cached', ''),
-                    item.get('banner', ''), item.get('banner_cached', ''),
-                    item.get('duration', 0), item.get('summary', ''),
-                    int(item.get('added_at', datetime.now().timestamp())),
-                    int(datetime.now().timestamp())
-                ))
-
-            else:
-                # Store movie or other media types
-                self.execute_with_retry(cursor, """
-                    INSERT OR REPLACE INTO media_items (
-                        rating_key, title, year, media_type,
-                        thumb, thumb_cached_path,
-                        art, art_cached_path,
-                        banner, banner_cached_path,
-                        duration, summary, added_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    item.get('rating_key'),
-                    item.get('title'),
-                    item.get('year'),
-                    item.get('media_type', 'movie'),
-                    item.get('thumb', ''),
-                    item.get('thumb_cached', ''),
-                    item.get('art', ''),
-                    item.get('art_cached', ''),
-                    item.get('banner', ''),
-                    item.get('banner_cached', ''),
-                    item.get('duration', 0),
-                    item.get('summary', ''),
-                    int(item.get('added_at', datetime.now().timestamp())),
-                    int(datetime.now().timestamp())
-                ))
-            
-            # Update sync status
-            self.update_sync_time('library')
+            # Use a single, robust INSERT OR REPLACE statement.
+            # This simplifies logic and ensures the latest data from the API is always used.
+            self.execute_with_retry(cursor, """
+                INSERT OR REPLACE INTO media_items (
+                    rating_key, title, year, media_type,
+                    thumb, art, banner, summary, duration,
+                    added_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                item.get('rating_key'),
+                item.get('title'),
+                item.get('year'),
+                item.get('media_type'),
+                item.get('thumb'),
+                item.get('art'),
+                item.get('banner'),
+                item.get('summary'),
+                item.get('duration'),
+                item.get('added_at'),
+                int(datetime.now().timestamp())
+            ))
         except Exception as e:
-            print(f"Error storing media item: {e}")
-            self.rollback_transaction()
-            raise
+            print(f"Error storing media item (rating_key: {item.get('rating_key')}): {e}")
+            # We don't rollback the entire transaction for one failed item,
+            # but you could add more specific error handling if needed.
 
     def store_play_history(self, history_item):
         """Store a play history item"""
@@ -453,6 +372,10 @@ class Database:
             
             overall_stats = dict(cursor.fetchone())
             
+            # Handle case where there is no history in the time frame
+            if not overall_stats:
+                overall_stats = {'total_plays': 0, 'total_duration': 0}
+
             # Get per-user stats
             cursor.execute("""
                 SELECT 
@@ -468,9 +391,10 @@ class Database:
             
             user_stats = [dict(row) for row in cursor.fetchall()]
             
+            # Prepare final result
             return {
-                "total_plays": overall_stats["total_plays"],
-                "total_duration": overall_stats["total_duration"] // 60,  # Convert to minutes
+                "total_plays": overall_stats.get("total_plays") or 0,
+                "total_duration": (overall_stats.get("total_duration") or 0) // 60,
                 "active_users": overall_stats["active_users"],
                 "user_stats": user_stats
             }
