@@ -3,6 +3,24 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from datetime import datetime, timedelta
 import numpy as np
+import pytz
+import matplotlib.dates as mdates
+
+# --- Style Configuration ---
+# Pulled from newsletter.html for a consistent look and feel.
+FONT_FAMILY = 'Metrophobic'
+DARK_GREY = '#AAAAAA'
+LIGHT_GREY_CARD_BG = '#2A2A2A'
+# Set global font and color styles for all plots
+plt.rcParams.update({
+    'font.family': 'sans-serif',
+    'font.sans-serif': [FONT_FAMILY],
+    'text.color': DARK_GREY,
+    'axes.labelcolor': DARK_GREY,
+    'xtick.color': DARK_GREY,
+    'ytick.color': DARK_GREY,
+    'axes.edgecolor': DARK_GREY
+})
 
 def create_daily_usage_density(history_data):
     """
@@ -26,14 +44,11 @@ def create_daily_usage_density(history_data):
         plt.close()
         return plot_path
     
-    # Convert timestamp to datetime and extract hour and day
-    # Make sure we're handling the timestamp correctly
-    if 'date' in df.columns:
-        # 'date' field contains Unix timestamps
-        df['datetime'] = pd.to_datetime(df['date'], unit='s')
-    else:
-        print("Warning: No 'date' field found in history data")
-        return None
+    # --- Timezone Correction Logic ---
+    # Convert all timestamps from UTC (Tautulli's default) to America/Los_Angeles
+    la_tz = pytz.timezone('America/Los_Angeles')
+    timestamps = pd.to_datetime(df['date'], unit='s', utc=True)
+    df['datetime'] = timestamps.dt.tz_convert(la_tz)
     
     df['hour'] = df['datetime'].dt.hour
     df['day'] = df['datetime'].dt.day_name()
@@ -148,9 +163,6 @@ def create_daily_usage_density(history_data):
     plt.savefig(plot_path, bbox_inches='tight', dpi=300, transparent=True)
     plt.close()
     
-    # Reset seaborn theme
-    sns.reset_defaults()
-    
     return plot_path
 
 def create_user_content_scatter(play_data):
@@ -228,12 +240,14 @@ def create_content_growth_line(library_data):
     # Convert to DataFrame
     df = pd.DataFrame(library_data)
     
-    # Convert Unix timestamp to datetime
+    # Convert Unix timestamp to datetime and apply timezone
+    la_tz = pytz.timezone('America/Los_Angeles')
     try:
-        df['added_at'] = pd.to_datetime(df['added_at'], unit='s')
+        timestamps = pd.to_datetime(df['added_at'], unit='s', utc=True)
+        df['added_at'] = timestamps.dt.tz_convert(la_tz)
     except (ValueError, TypeError):
-        # Try parsing as ISO string if Unix timestamp fails
-        df['added_at'] = pd.to_datetime(df['added_at'])
+        # Try parsing as ISO string if Unix timestamp fails, then localize
+        df['added_at'] = pd.to_datetime(df['added_at']).dt.tz_localize('UTC').dt.tz_convert(la_tz)
     
     # Group by date and content type
     daily_adds = df.groupby([pd.Grouper(key='added_at', freq='D'), 'section_type']).size().unstack(fill_value=0)
@@ -249,7 +263,6 @@ def create_content_growth_line(library_data):
     # Calculate cumulative sums
     cumulative = daily_adds.cumsum()
     
-    # Add a 'Total' column
     cumulative['Total'] = cumulative[['Movies', 'TV Seasons', 'Music Albums']].sum(axis=1)
 
     # Create the plot
