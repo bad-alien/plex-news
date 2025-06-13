@@ -238,54 +238,75 @@ def create_content_growth_line(library_data):
         plt.close()
         return plot_path
     
-    # Convert to DataFrame
+    # Convert to DataFrame and handle timezones
     df = pd.DataFrame(library_data)
-    
-    # Convert Unix timestamp to datetime and apply timezone
     la_tz = pytz.timezone('America/Los_Angeles')
     try:
         timestamps = pd.to_datetime(df['added_at'], unit='s', utc=True)
         df['added_at'] = timestamps.dt.tz_convert(la_tz)
     except (ValueError, TypeError):
-        # Try parsing as ISO string if Unix timestamp fails, then localize
         df['added_at'] = pd.to_datetime(df['added_at']).dt.tz_localize('UTC').dt.tz_convert(la_tz)
     
     # Group by date and content type
     daily_adds = df.groupby([pd.Grouper(key='added_at', freq='D'), 'section_type']).size().unstack(fill_value=0)
     
-    # Ensure all desired columns exist, even if there's no data for them
     for col in ['movie', 'season', 'album']:
         if col not in daily_adds.columns:
             daily_adds[col] = 0
             
-    # Rename columns for clarity in the legend
-    daily_adds = daily_adds.rename(columns={'movie': 'Movies', 'season': 'TV Seasons', 'album': 'Music Albums'})
+    daily_adds = daily_adds.rename(columns={'movie': 'Movies', 'season': 'Seasons', 'album': 'Albums'})
 
-    # Calculate cumulative sums
+    # Calculate cumulative sums and Total
     cumulative = daily_adds.cumsum()
-    
-    cumulative['Total'] = cumulative[['Movies', 'TV Seasons', 'Music Albums']].sum(axis=1)
+    cumulative['Total'] = cumulative[['Movies', 'Seasons', 'Albums']].sum(axis=1)
 
-    # Create the plot
-    plt.style.use('seaborn-v0_8-whitegrid')
-    plt.figure(figsize=(12, 6))
+    # --- Create the plot ---
+    fig, ax = plt.subplots(figsize=(12, 6))
     
+    # Define colors for lines and labels
+    colors = {
+        'Movies': '#0087bf',
+        'Seasons': '#26a69a',
+        'Albums': '#7e55a3',
+        'Total': '#e5a00d'
+    }
+
     # Plot each content type
-    for column in ['Movies', 'TV Seasons', 'Music Albums', 'Total']:
-        plt.plot(cumulative.index, cumulative[column], label=column, lw=2 if column == 'Total' else 1.5)
+    for column in colors.keys():
+        if column in cumulative.columns:
+            ax.plot(cumulative.index, cumulative[column], color=colors[column], lw=4 if column == 'Total' else 3)
 
-    # Set the x-axis to start from March of the current year and end today.
-    today = pd.to_datetime('today')
-    start_date = pd.to_datetime(f'{today.year}-03-01')
-    plt.xlim(left=start_date, right=today)
-
-    plt.title('Library Growth Over Time', fontsize=16, pad=20)
-    plt.xlabel('Date Added')
-    plt.ylabel('Total Count')
-    plt.legend()
+    # --- Add Inline Labels and Totals ---
+    today = pd.to_datetime('today').tz_localize(la_tz)
+    start_date = pd.to_datetime(f'{today.year}-03-01').tz_localize(la_tz)
     
+    for column in colors.keys():
+        if column in cumulative.columns:
+            # Get last point for total count
+            last_date = cumulative.index[-1]
+            last_count = cumulative[column].iloc[-1]
+            label_text = f"{last_count} {column}"
+            
+            # Place label at the end of the line, slightly offset
+            ax.text(last_date + timedelta(days=2), last_count, label_text, color=colors[column], 
+                    ha='left', va='center', fontsize=14, weight='bold', clip_on=False)
+
+    # --- Final plot styling ---
+    ax.set_xlim(left=start_date, right=today)
+    ax.spines['left'].set_color('#AAAAAA')
+    ax.spines['bottom'].set_color('#AAAAAA')
+    ax.spines['right'].set_visible(False)
+    ax.spines['top'].set_visible(False)
+    ax.tick_params(axis='x', colors='white', labelsize=10)
+    ax.set_yticks([])
+    
+    # Format date labels on x-axis
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
+    
+    plt.tight_layout()
+
     # Save and return path
     plot_path = 'assets/images/content_growth_line.png'
-    plt.savefig(plot_path, bbox_inches='tight', dpi=300)
+    plt.savefig(plot_path, bbox_inches='tight', dpi=300, transparent=True)
     plt.close()
     return plot_path 

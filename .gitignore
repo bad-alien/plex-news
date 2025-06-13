@@ -41,4 +41,5 @@ output_images/
 data/
 newsletter_preview.html
 assets/images/logo.*
-assets/cache/ 
+assets/cache/
+session_summaries/ 
