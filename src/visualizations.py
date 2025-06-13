@@ -92,9 +92,9 @@ def create_daily_usage_density(history_data):
     
     # Draw the densities in a few steps
     g.map(sns.kdeplot, "shifted_hour",
-          bw_adjust=.5, clip_on=False,
+          bw_adjust=.5, clip_on=True,
           fill=True, alpha=1, linewidth=1.5)
-    g.map(sns.kdeplot, "shifted_hour", clip_on=False, color="w", lw=2, bw_adjust=.5)
+    g.map(sns.kdeplot, "shifted_hour", clip_on=True, color="w", lw=2, bw_adjust=.5)
     
     # Add a reference line at y=0 using the hue mapping
     g.refline(y=0, linewidth=2, linestyle="-", color=None, clip_on=False)
@@ -106,7 +106,7 @@ def create_daily_usage_density(history_data):
         ax.text(-0.02, .5, label, fontweight="bold", color=color,
                 ha="right", va="center", transform=ax.transAxes, fontsize=12)
     
-    g.map(label, "hour")
+    g.map(label, "shifted_hour")
     
     # Set the subplots to overlap
     g.figure.subplots_adjust(hspace=-.25)
@@ -149,8 +149,9 @@ def create_daily_usage_density(history_data):
             time_labels[-1] = "6am"
             
             ax.set_xticks(tick_positions)
-            ax.set_xticklabels(time_labels, rotation=0, ha='center', fontsize=12)
-            ax.tick_params(colors='black')
+            ax.set_xticklabels(time_labels, rotation=0, ha='center', fontsize=12, color='white')
+            ax.tick_params(colors='white')
+            ax.set_xlabel("") # Remove the x-axis title
         else:
             # Remove x-tick labels from all other plots
             ax.set_xticklabels([])
