@@ -1,81 +1,51 @@
 # Plex Newsletter Generator
 
-A Python application that generates beautiful weekly newsletters for your Plex server using Tautulli statistics.
+Generates a simple newsletter with Plex server user activity stats and visualizations.
 
-## Features
+## Setup
 
-- Weekly digest of your Plex server activity
-- Recently added content overview
-- Trending content analysis
-- Community favorites (most watched by multiple users)
-- User activity statistics
-- Beautiful, responsive HTML email template
-- SQLite database for caching and offline access
-- Customizable with your own logo and assets
-
-## Requirements
-
-- Python 3.x
-- Tautulli server with API access
-- Plex Media Server
-
-## Installation
-
-1. Clone the repository:
-```bash
-git clone https://github.com/bad-alien/plex-news.git
-cd plex-news
-```
-
-2. Create and activate a virtual environment:
+1. Create a virtual environment and install dependencies:
 ```bash
 python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
-
-3. Install dependencies:
-```bash
+source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-4. Create a `.env` file with your Tautulli configuration:
+2. Create a `.env` file with your Tautulli credentials:
 ```
 TAUTULLI_URL=http://your.tautulli.server:port
 TAUTULLI_API_KEY=your_api_key
 ```
 
-5. (Optional) Add your logo:
-- Place your logo in `assets/images/` as either `logo.png` or `logo.jpg`
-
 ## Usage
 
-Generate a newsletter:
+### 1. Sync Data from Tautulli
+Pull and sync data from Tautulli to local database:
+```bash
+python sync_data.py              # Incremental sync (new data only)
+python sync_data.py --clear      # Clear database and full sync
+```
+
+### 2. Generate Newsletter
+Create newsletter with visualizations from database:
 ```bash
 python generate_newsletter.py
 ```
+Output: `newsletter_preview.html`
 
-The script will:
-1. Connect to your Tautulli server
-2. Gather statistics and media information
-3. Generate an HTML newsletter
-4. Save it as `newsletter_preview.html`
+### 3. Query Data
+Run custom SQL queries on your data:
+```bash
+python query.py                  # Run the query in query.py
+python query.py --schema         # View database structure
+```
 
-## Customization
+Edit the SQL query at the top of `query.py` to explore your data.
 
-### Assets
-Place your custom assets in the `assets/images/` directory:
-- `logo.png` or `logo.jpg` - Your server logo
-- Section icons (optional):
-  * `recently-added.png`
-  * `trending.png`
-  * `community.png`
-  * `stats.png`
-  * `play.png`
-  * `users.png`
+## What's Included
 
-### Database
-The application uses SQLite to cache data and reduce API calls. The database is automatically created at `data/plex_stats.db`.
-
-## License
-
-MIT License - See LICENSE file for details. 
+- **User Activity Stats**: Total plays, watch time, active users (entire year)
+- **Visualizations**:
+  - Server usage patterns (when server is most active)
+  - User content engagement (how users interact with different content types)
+  - Library growth over time

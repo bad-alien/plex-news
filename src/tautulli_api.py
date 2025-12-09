@@ -3,10 +3,7 @@ import requests
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 from collections import defaultdict
-from pathlib import Path
 from .database import Database
-import shutil
-from PIL import Image, ImageDraw, ImageFont
 
 # Load environment variables
 load_dotenv(override=True)
@@ -16,8 +13,6 @@ class TautulliAPI:
         self.base_url = os.getenv("TAUTULLI_URL", "").rstrip('/')
         self.api_key = os.getenv("TAUTULLI_API_KEY", "")
         self.db = Database()
-        self.image_cache_dir = Path("assets/cache/images")
-        self.image_cache_dir.mkdir(parents=True, exist_ok=True)
         
         if not self.base_url or not self.api_key:
             raise ValueError("TAUTULLI_URL and TAUTULLI_API_KEY must be set in .env file")
@@ -41,57 +36,56 @@ class TautulliAPI:
             print(f"Error making request to Tautulli API: {e}")
             return None
 
-    def sync_data(self, force_full_sync=False):
-        """Sync data from Tautulli to local database"""
+    def sync_data(self):
+        """Sync data from Tautulli to local database (incremental)"""
         last_sync = self.db.get_last_sync_time()
-        
+
         try:
             self.db.begin_transaction()
-            
+
             # Get recently added items
             result = self._make_request("get_recently_added", count=100)
             if result and "response" in result:
                 items = result["response"].get("data", {}).get("recently_added", [])
                 for item in items:
                     self.db.store_media_item(item)
-            
-            # Get history with pagination
+
+            # Get history with pagination (incremental from last sync)
             offset = 0
             while True:
-                # If not a force sync, only get items since last sync
                 params = {
                     "length": 1000,
                     "start": offset
                 }
-                
-                if not force_full_sync and last_sync['history'] > 0:
+
+                if last_sync['history'] > 0:
                     params["start_date"] = last_sync['history']
-                
+
                 result = self._make_request("get_history", **params)
-                
+
                 if not result or "response" not in result:
                     break
-                    
+
                 data = result["response"].get("data", {})
                 history = data.get("data", [])
                 if not history:
                     break
-                    
+
                 # Store each history item
                 for item in history:
                     self.db.store_play_history(item)
                     # Also store the media item if it doesn't exist
                     self.db.store_media_item(item)
-                
+
                 offset += len(history)
                 total_records = data.get("recordsTotal", 0)
                 if offset >= total_records:
                     break
-            
+
             self.db.commit_transaction()
-            print(f"Data sync completed. {'Full sync' if force_full_sync else 'Incremental sync'}")
+            print(f"Incremental data sync completed.")
             return True
-            
+
         except Exception as e:
             print(f"Error during sync: {e}")
             self.db.rollback_transaction()
@@ -669,148 +663,4 @@ class TautulliAPI:
         
         return user_stats
 
-    def full_library_sync(self):
-        """Perform a full sync of all libraries from Tautulli."""
-        print("Starting full library sync. This may take a while...")
-        try:
-            # Clear the database for a truly fresh start
-            self.db.clear_all_data()
-
-            sections_result = self._make_request("get_libraries")
-            if not sections_result or "response" not in sections_result:
-                print("Error: Could not fetch library sections.")
-                return False
-            
-            libraries = sections_result["response"]["data"]
-            print(f"Found {len(libraries)} libraries to sync.")
-
-            self.db.begin_transaction()
-            
-            for lib in libraries:
-                section_id = lib['section_id']
-                section_name = lib['section_name']
-                section_type = lib['section_type']
-                
-                print(f"--- Syncing '{section_name}' (Type: {section_type}) ---")
-
-                if section_type == 'movie':
-                    self._sync_movie_library(section_id)
-                elif section_type == 'show':
-                    self._sync_show_library(section_id)
-                elif section_type == 'artist':
-                    self._sync_music_library(section_id)
-                else:
-                    print(f"Skipping unsupported library type: {section_type}")
-
-            self.db.commit_transaction()
-            print("\nFull library sync completed.")
-            return True
-
-        except Exception as e:
-            print(f"\nAn error occurred during full library sync: {e}")
-            import traceback
-            traceback.print_exc()
-            self.db.rollback_transaction()
-            return False
-
-    def _sync_movie_library(self, section_id):
-        """Sync all movies from a specific library section."""
-        offset = 0
-        total_synced = 0
-        while True:
-            media_result = self._make_request("get_library_media_info", section_id=section_id, start=offset, length=200)
-            if not (data := media_result.get("response", {}).get("data", {})) or not (media_list := data.get("data", [])):
-                break
-
-            for item in media_list:
-                if item.get('media_type') == 'movie':
-                    self.db.store_media_item(item)
-                    total_synced += 1
-            
-            print(f"  Synced {total_synced} movies...", end='\r')
-
-            if len(media_list) < 200:
-                break
-            offset += 200
-        print(f"  Finished syncing {total_synced} movies.")
-
-    def _sync_show_library(self, section_id):
-        """Sync all shows and their seasons from a TV library."""
-        shows_result = self._make_request("get_library_media_info", section_id=section_id, length=10000)
-        if not (all_items := shows_result.get("response", {}).get("data", {}).get("data", [])):
-            print("  No items found in this library.")
-            return
-        
-        shows = [item for item in all_items if item.get('media_type') == 'show']
-        print(f"  Found {len(shows)} shows. Now fetching seasons...")
-        total_seasons = 0
-
-        for i, show in enumerate(shows):
-            self.db.store_media_item(show)
-
-            # 2. Get seasons for the show
-            seasons_result = self._make_request("get_children_metadata", rating_key=show['rating_key'])
-            if not (seasons := seasons_result.get("response", {}).get("data", {}).get("children_list", [])):
-                continue
-
-            for season in seasons:
-                season['media_type'] = 'season' # API response doesn't include this
-
-                # 3. Get episodes to find the season's true 'added_at' date
-                episodes_result = self._make_request("get_children_metadata", rating_key=season['rating_key'])
-                episodes = episodes_result.get('response', {}).get('data', {}).get('children_list', [])
-                
-                earliest_added_at = min(
-                    (int(ep.get('added_at')) for ep in episodes if ep.get('added_at')),
-                    default=None
-                )
-                
-                if earliest_added_at:
-                    season['added_at'] = earliest_added_at
-                
-                self.db.store_media_item(season)
-                total_seasons += 1
-            
-            print(f"  Processed {i+1}/{len(shows)} shows, found {total_seasons} seasons so far...", end='\r')
-        
-        print(f"\n  Finished syncing {total_seasons} seasons from {len(shows)} shows.")
-
-    def _sync_music_library(self, section_id):
-        """Sync all albums from a music library."""
-        artists_result = self._make_request("get_library_media_info", section_id=section_id, length=20000)
-        if not (all_artists := artists_result.get("response", {}).get("data", {}).get("data", [])):
-            print("  No artists found in this library.")
-            return
-        
-        artists = [item for item in all_artists if item.get('media_type') == 'artist']
-        print(f"  Found {len(artists)} artists. Now fetching albums...")
-        total_albums = 0
-        
-        for i, artist in enumerate(artists):
-            # 2. Get albums for the artist
-            albums_result = self._make_request("get_children_metadata", rating_key=artist['rating_key'])
-            if not (albums := albums_result.get('response', {}).get('data', {}).get('children_list', [])):
-                continue
-            
-            for album in albums:
-                if album.get('media_type') != 'album':
-                    continue
-
-                # 3. Get tracks to find the album's true 'added_at' date
-                tracks_result = self._make_request("get_children_metadata", rating_key=album['rating_key'])
-                tracks = tracks_result.get('response', {}).get('data', {}).get('children_list', [])
-                
-                earliest_added_at = min(
-                    (int(tr.get('added_at')) for tr in tracks if tr.get('added_at')),
-                    default=None
-                )
-                
-                if earliest_added_at:
-                    album['added_at'] = earliest_added_at
-                    
-                self.db.store_media_item(album)
-                total_albums += 1
-
-            print(f"  Processed {i+1}/{len(artists)} artists, found {total_albums} albums so far...", end='\r')
-            
-        print(f"\n  Finished syncing {total_albums} albums from {len(artists)} artists.") 
+ 
