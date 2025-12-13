@@ -98,7 +98,7 @@ def create_github_heatmap(data, title, ax):
             return COLORS[4]
 
     # Draw individual squares
-    square_size = 0.85  # Size of each square (less than 1 for gaps)
+    square_size = 0.75  # Size of each square (less than 1 for gaps)
     for i in range(7):
         for j in range(weeks):
             count = heatmap_matrix[i, j]
