@@ -38,8 +38,8 @@ env/
 *.db
 *.sqlite3
 output_images/
+outputs/
 data/
-newsletter_preview.html
 assets/images/logo.*
 assets/cache/
 session_summaries/ 

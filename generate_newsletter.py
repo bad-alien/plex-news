@@ -106,10 +106,13 @@ def generate_newsletter():
     )
 
     # Save the newsletter
-    with open('newsletter_preview.html', 'w') as f:
+    from pathlib import Path
+    Path("outputs").mkdir(exist_ok=True)
+
+    with open('outputs/newsletter_preview.html', 'w') as f:
         f.write(newsletter_html)
 
-    print("\nNewsletter generated! Open newsletter_preview.html in your browser to preview.")
+    print("\nNewsletter generated! Open outputs/newsletter_preview.html in your browser to preview.")
     if not logo_path:
         print("\nNote: No logo found. Please add a logo.png file to assets/images/ directory.")
 
