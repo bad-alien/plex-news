@@ -34,6 +34,9 @@ env/
 *.swp
 *.swo
 
+# macOS
+.DS_Store
+
 # Project specific
 *.db
 *.sqlite3
@@ -41,5 +44,4 @@ output_images/
 outputs/
 data/
 assets/images/logo.*
-assets/cache/
-session_summaries/ 
+assets/cache/ 

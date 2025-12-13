@@ -1,12 +1,18 @@
+import sys
+from pathlib import Path
 from datetime import datetime
 from jinja2 import Environment, FileSystemLoader
+
+# Add project root to path so we can import from src/
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
 from src.tautulli_api import TautulliAPI
 from src.visualizations import (
     create_daily_usage_density,
     create_user_content_scatter,
     create_content_growth_line
 )
-from pathlib import Path
 
 def format_duration(minutes):
     if not minutes:
