@@ -84,6 +84,7 @@ class Database:
                     banner_cached_path TEXT,
                     summary TEXT,
                     duration INTEGER,
+                    file_size INTEGER,
                     added_at INTEGER,
                     updated_at INTEGER
                 )
@@ -123,13 +124,22 @@ class Database:
             self.execute_with_retry(cursor, "CREATE INDEX IF NOT EXISTS idx_history_watched_at ON play_history (watched_at)")
             self.execute_with_retry(cursor, "CREATE INDEX IF NOT EXISTS idx_history_user ON play_history (user_id)")
             self.execute_with_retry(cursor, "CREATE INDEX IF NOT EXISTS idx_media_type ON media_items (media_type)")
-            
+
+            # Migration: Add file_size column if it doesn't exist
+            try:
+                cursor.execute("SELECT file_size FROM media_items LIMIT 1")
+            except sqlite3.OperationalError:
+                print("Adding file_size column to media_items table...")
+                self.execute_with_retry(cursor, "ALTER TABLE media_items ADD COLUMN file_size INTEGER")
+                conn.commit()
+                print("Migration complete: file_size column added")
+
             # Initialize sync status if not exists
             self.execute_with_retry(cursor, """
                 INSERT OR IGNORE INTO sync_status (id, last_history_sync, last_library_sync)
                 VALUES (1, 0, 0)
             """)
-            
+
             conn.commit()
 
     def clear_all_data(self):
@@ -189,9 +199,9 @@ class Database:
             self.execute_with_retry(cursor, """
                 INSERT OR REPLACE INTO media_items (
                     rating_key, title, year, media_type,
-                    thumb, art, banner, summary, duration,
+                    thumb, art, banner, summary, duration, file_size,
                     added_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 item.get('rating_key'),
                 item.get('title'),
@@ -202,6 +212,7 @@ class Database:
                 item.get('banner'),
                 item.get('summary'),
                 item.get('duration'),
+                item.get('file_size'),
                 item.get('added_at'),
                 int(datetime.now().timestamp())
             ))

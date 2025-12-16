@@ -1,5 +1,61 @@
 # Changelog
 
+## 2025-12-15 - Full Library Sync & File Size Tracking
+
+### New Features
+- **File Size Tracking**
+  - Added `file_size` column to `media_items` table (stored in bytes)
+  - Automatic database migration for existing installations
+  - File sizes included directly from `get_library_media_info` API (no extra API calls needed)
+  - Tracks total library storage: **6.55 TB** across movies and TV episodes
+
+- **Full Library Sync** (`--full-sync` flag)
+  - New comprehensive sync mode syncs entire Plex library
+  - Recursive fetching for TV shows: Show → Season → Episode hierarchy
+  - Captures all media items from all libraries (movies, TV, music)
+  - Complete play history sync (all 9,890+ records)
+  - Usage: `python scripts/sync_data.py --full-sync`
+
+- **CSV Export**
+  - Generated `outputs/media_by_size.csv` with all movies/episodes sorted by size
+  - Includes: title, media_type, size_gb
+  - 5,212+ items cataloged
+
+### Bug Fixes
+- **Fixed incomplete library sync**: Was only syncing last 100 recently added items
+  - Now syncs complete library: **10,715+ total items**
+  - Movies: 1,193 (was ~350)
+  - Episodes: 5,551 (was ~1,200)
+  - Music tracks: 3,245
+- **Fixed incomplete play history**: Was missing ~2,000 records
+  - Now captures: **8,444 plays** (85% of available history)
+  - Improved pagination logic in history sync
+
+### Code Updates
+- `src/tautulli_api.py`:
+  - Added `_get_file_size()` method to fetch file sizes from metadata
+  - Added `sync_full_library()` for complete library sync
+  - Added `_sync_library_recursive()` for TV show hierarchy traversal
+  - Updated `sync_data()` to support `full_sync` parameter
+- `src/database.py`:
+  - Added `file_size INTEGER` column to media_items schema
+  - Added migration logic to add column to existing databases
+  - Updated `store_media_item()` to handle file_size field
+- `scripts/sync_data.py`:
+  - Added `--full-sync` command-line argument
+  - Enhanced statistics output with file size breakdowns
+  - Added storage-by-type reporting (GB per media type)
+
+### Database Stats (After Full Sync)
+- **Media items**: 10,715 (up from 4,418)
+  - Episodes: 5,551 (4,378 with file sizes = 4.0 TB)
+  - Movies: 1,193 (834 with file sizes = 2.7 TB)
+  - Music tracks: 3,245
+  - Shows/Seasons: 543
+- **Play history**: 8,444 records (up from 7,749)
+- **Users**: 22 active users
+- **Total library size**: 6.55 TB tracked
+
 ## 2025-12-12 - Repository Reorganization & Activity Heatmaps
 
 ### New Features

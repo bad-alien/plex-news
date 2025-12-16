@@ -36,29 +36,184 @@ class TautulliAPI:
             print(f"Error making request to Tautulli API: {e}")
             return None
 
-    def sync_data(self):
-        """Sync data from Tautulli to local database (incremental)"""
+    def _sync_library_recursive(self, section_id, section_name, rating_key=None, level=0):
+        """Recursively sync library items (for TV shows: show -> season -> episode)"""
+        items_synced = 0
+
+        offset = 0
+        while True:
+            params = {
+                "section_id": section_id,
+                "length": 1000,
+                "start": offset
+            }
+
+            if rating_key:
+                params["rating_key"] = rating_key
+
+            result = self._make_request("get_library_media_info", **params)
+
+            if not result or "response" not in result:
+                break
+
+            data = result["response"].get("data", {})
+            items = data.get("data", [])
+            total_records = data.get("recordsTotal", 0)
+
+            if not items:
+                break
+
+            for item in items:
+                media_type = item.get('media_type')
+                item_rating_key = item.get('rating_key')
+
+                # Store this item
+                normalized_item = {
+                    'rating_key': item_rating_key,
+                    'title': item.get('title'),
+                    'year': item.get('year'),
+                    'media_type': media_type,
+                    'thumb': item.get('thumb'),
+                    'duration': item.get('duration'),
+                    'file_size': item.get('file_size'),
+                    'added_at': item.get('added_at'),
+                }
+                self.db.store_media_item(normalized_item)
+                items_synced += 1
+
+                # Recursively fetch children for shows and seasons
+                if media_type in ['show', 'season']:
+                    child_count = self._sync_library_recursive(
+                        section_id, section_name, item_rating_key, level + 1
+                    )
+                    items_synced += child_count
+
+            offset += len(items)
+
+            if offset >= total_records:
+                break
+
+        return items_synced
+
+    def sync_full_library(self):
+        """Sync all media items from all libraries with file sizes"""
+        try:
+            self.db.begin_transaction()
+
+            # Get all libraries
+            result = self._make_request("get_libraries")
+            if not result or "response" not in result:
+                print("Could not fetch libraries")
+                return False
+
+            libraries = result["response"].get("data", [])
+            print(f"\nFound {len(libraries)} libraries to sync")
+
+            total_synced = 0
+
+            for library in libraries:
+                section_id = library.get("section_id")
+                section_name = library.get("section_name")
+                section_type = library.get("section_type")
+
+                print(f"\nSyncing library: {section_name} ({section_type})")
+
+                # For TV libraries, use recursive sync to get episodes
+                if section_type == 'show':
+                    library_total = self._sync_library_recursive(section_id, section_name)
+                    print(f"✓ Completed {section_name}: {library_total} items (shows, seasons, episodes)")
+                    total_synced += library_total
+                else:
+                    # For other libraries (movies, music), use regular pagination
+                    offset = 0
+                    library_total = 0
+
+                    while True:
+                        result = self._make_request(
+                            "get_library_media_info",
+                            section_id=section_id,
+                            length=1000,
+                            start=offset
+                        )
+
+                        if not result or "response" not in result:
+                            break
+
+                        data = result["response"].get("data", {})
+                        items = data.get("data", [])
+                        total_records = data.get("recordsTotal", 0)
+
+                        if not items:
+                            break
+
+                        # Store each item
+                        for item in items:
+                            normalized_item = {
+                                'rating_key': item.get('rating_key'),
+                                'title': item.get('title'),
+                                'year': item.get('year'),
+                                'media_type': item.get('media_type'),
+                                'thumb': item.get('thumb'),
+                                'duration': item.get('duration'),
+                                'file_size': item.get('file_size'),
+                                'added_at': item.get('added_at'),
+                            }
+                            self.db.store_media_item(normalized_item)
+
+                        library_total += len(items)
+                        total_synced += len(items)
+                        offset += len(items)
+
+                        print(f"  Synced {library_total}/{total_records} items from {section_name}...")
+
+                        if offset >= total_records:
+                            break
+
+                    print(f"✓ Completed {section_name}: {library_total} items")
+
+            self.db.commit_transaction()
+            print(f"\n✓ Full library sync completed: {total_synced} total items synced")
+            return True
+
+        except Exception as e:
+            print(f"Error during full library sync: {e}")
+            import traceback
+            traceback.print_exc()
+            self.db.rollback_transaction()
+            return False
+
+    def sync_data(self, fetch_file_sizes=True, full_sync=False):
+        """Sync data from Tautulli to local database"""
+
+        # If full sync requested, sync entire library first
+        if full_sync:
+            print("=" * 60)
+            print("FULL LIBRARY SYNC")
+            print("=" * 60)
+            if not self.sync_full_library():
+                return False
+
         last_sync = self.db.get_last_sync_time()
 
         try:
             self.db.begin_transaction()
 
-            # Get recently added items
-            result = self._make_request("get_recently_added", count=100)
-            if result and "response" in result:
-                items = result["response"].get("data", {}).get("recently_added", [])
-                for item in items:
-                    self.db.store_media_item(item)
+            print("\n" + "=" * 60)
+            print("SYNCING PLAY HISTORY")
+            print("=" * 60)
 
-            # Get history with pagination (incremental from last sync)
+            # Get history with pagination (full history if full_sync, incremental otherwise)
             offset = 0
+            total_history_synced = 0
+
             while True:
                 params = {
                     "length": 1000,
                     "start": offset
                 }
 
-                if last_sync['history'] > 0:
+                # Only use start_date for incremental syncs
+                if not full_sync and last_sync['history'] > 0:
                     params["start_date"] = last_sync['history']
 
                 result = self._make_request("get_history", **params)
@@ -68,6 +223,8 @@ class TautulliAPI:
 
                 data = result["response"].get("data", {})
                 history = data.get("data", [])
+                total_records = data.get("recordsTotal", 0)
+
                 if not history:
                     break
 
@@ -77,17 +234,22 @@ class TautulliAPI:
                     # Also store the media item if it doesn't exist
                     self.db.store_media_item(item)
 
+                total_history_synced += len(history)
                 offset += len(history)
-                total_records = data.get("recordsTotal", 0)
+
+                print(f"Synced {offset}/{total_records} play history records...")
+
                 if offset >= total_records:
                     break
 
             self.db.commit_transaction()
-            print(f"Incremental data sync completed.")
+            print(f"✓ Play history sync completed: {total_history_synced} records synced")
             return True
 
         except Exception as e:
             print(f"Error during sync: {e}")
+            import traceback
+            traceback.print_exc()
             self.db.rollback_transaction()
             return False
 
@@ -271,11 +433,11 @@ class TautulliAPI:
         """Process a media item to ensure all images are cached locally"""
         if not isinstance(item, dict):
             return item
-        
+
         rating_key = item.get('rating_key')
         if not rating_key:
             return item
-        
+
         # List of fields that might contain image paths
         image_fields = [
             ('thumb', 'thumb'),
@@ -284,12 +446,32 @@ class TautulliAPI:
             ('parent_thumb', 'parent_thumb'),
             ('grandparent_thumb', 'grandparent_thumb')
         ]
-        
+
         for field, img_type in image_fields:
             if field in item and item[field]:
                 item[field] = self._process_image_path(item[field], rating_key)
-        
+
         return item
+
+    def _get_file_size(self, rating_key):
+        """Get file size for a media item from metadata"""
+        try:
+            result = self._make_request("get_metadata", rating_key=rating_key)
+            if result and "response" in result:
+                data = result["response"].get("data", {})
+                media_info = data.get("media_info", [])
+
+                # Get file size from first media item's first part
+                if media_info and len(media_info) > 0:
+                    parts = media_info[0].get("parts", [])
+                    if parts and len(parts) > 0:
+                        file_size = parts[0].get("file_size")
+                        if file_size:
+                            return int(file_size)
+        except Exception as e:
+            print(f"Error getting file size for rating_key {rating_key}: {e}")
+
+        return None
 
     def get_recently_added(self, count=5):
         """Get recently added media"""
