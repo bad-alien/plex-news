@@ -134,6 +134,15 @@ class Database:
                 conn.commit()
                 print("Migration complete: file_size column added")
 
+            # Migration: Add grandparent_rating_key column if it doesn't exist
+            try:
+                cursor.execute("SELECT grandparent_rating_key FROM media_items LIMIT 1")
+            except sqlite3.OperationalError:
+                print("Adding grandparent_rating_key column to media_items table...")
+                self.execute_with_retry(cursor, "ALTER TABLE media_items ADD COLUMN grandparent_rating_key TEXT")
+                conn.commit()
+                print("Migration complete: grandparent_rating_key column added")
+
             # Initialize sync status if not exists
             self.execute_with_retry(cursor, """
                 INSERT OR IGNORE INTO sync_status (id, last_history_sync, last_library_sync)
@@ -154,6 +163,41 @@ class Database:
             self.execute_with_retry(cursor, "UPDATE sync_status SET last_history_sync = 0, last_library_sync = 0, total_items_synced = 0 WHERE id = 1")
             conn.commit()
         print("Database cleared.")
+
+    def remove_stale_media_items(self, valid_rating_keys):
+        """Remove media items that are no longer in the library.
+
+        Args:
+            valid_rating_keys: Set of rating_keys that currently exist in the library
+        """
+        with self.get_connection(new_connection=True) as conn:
+            cursor = conn.cursor()
+
+            # Get all rating_keys in database
+            self.execute_with_retry(cursor, "SELECT rating_key FROM media_items")
+            db_keys = {row['rating_key'] for row in cursor.fetchall()}
+
+            # Find stale keys (in DB but not in valid set)
+            stale_keys = db_keys - valid_rating_keys
+
+            if stale_keys:
+                print(f"Removing {len(stale_keys)} stale media items...")
+                # Delete in batches to avoid query size limits
+                stale_list = list(stale_keys)
+                batch_size = 500
+                for i in range(0, len(stale_list), batch_size):
+                    batch = stale_list[i:i + batch_size]
+                    placeholders = ','.join('?' * len(batch))
+                    self.execute_with_retry(cursor,
+                        f"DELETE FROM media_items WHERE rating_key IN ({placeholders})",
+                        batch
+                    )
+                conn.commit()
+                print(f"Removed {len(stale_keys)} stale media items")
+            else:
+                print("No stale media items to remove")
+
+            return len(stale_keys)
 
     def get_last_sync_time(self):
         """Get the timestamp of the last successful sync"""
@@ -191,7 +235,7 @@ class Database:
         """Store a media item in the database using INSERT OR REPLACE."""
         if self._connection is None:
             self.begin_transaction()
-        
+
         cursor = self._connection.cursor()
         try:
             # Use a single, robust INSERT OR REPLACE statement.
@@ -200,8 +244,8 @@ class Database:
                 INSERT OR REPLACE INTO media_items (
                     rating_key, title, year, media_type,
                     thumb, art, banner, summary, duration, file_size,
-                    added_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    grandparent_rating_key, added_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 item.get('rating_key'),
                 item.get('title'),
@@ -213,6 +257,7 @@ class Database:
                 item.get('summary'),
                 item.get('duration'),
                 item.get('file_size'),
+                item.get('grandparent_rating_key'),
                 item.get('added_at'),
                 int(datetime.now().timestamp())
             ))

@@ -1,5 +1,50 @@
 # Changelog
 
+## 2025-12-17 - Sync Fixes & Pruning Reports
+
+### Bug Fixes
+- **Fixed stale library data from Tautulli cache**
+  - Added `refresh=true` parameter to all `get_library_media_info` API calls
+  - Tautulli was returning cached data (132 shows) instead of actual library (204 shows)
+  - Sync now retrieves fresh data directly from Plex
+
+- **Fixed shows with changed rating_keys**
+  - Shows like Avatar: The Last Airbender, Batman: The Animated Series, Big Little Lies had 0 episodes
+  - Root cause: Plex assigned new rating_keys when shows were re-added to library
+  - Old orphan entries are now cleaned up before sync
+
+### New Features
+- **Stale data cleanup** before full sync
+  - New `remove_stale_media_items()` method in database.py
+  - Collects all current rating_keys from Plex and removes orphaned DB entries
+  - Prevents accumulation of outdated records
+
+- **Pruning reports script** (`scripts/generate_pruning_reports.py`)
+  - Generates CSV reports for library pruning decisions
+  - `outputs/movies_least_accessed.csv` - Movies sorted by play count
+  - `outputs/tvshows_least_accessed.csv` - TV shows aggregated by series
+  - Includes: title, year, episode_count, file size, play count, unique users, users list
+  - Proper CSV quoting for titles starting with numbers
+
+### Database Stats (After Sync)
+- **Shows**: 204 (was 132) - +72 shows recovered
+- **Episodes**: 7,405 (was 5,558) - +1,847 episodes recovered
+- **Seasons**: 590 (was 411)
+- **Movies**: 1,409
+
+### Code Updates
+- `src/tautulli_api.py`:
+  - Added `refresh="true"` to `get_library_media_info` calls
+  - Added `_collect_all_rating_keys()` for stale data detection
+  - Added `_collect_children_keys()` for recursive key collection
+  - Updated `sync_full_library()` with optional `cleanup_stale` parameter
+- `src/database.py`:
+  - Added `remove_stale_media_items()` method for cleaning orphaned records
+- `scripts/generate_pruning_reports.py`:
+  - New script for generating pruning decision CSVs
+  - Added `unique_users` column
+  - Uses `QUOTE_NONNUMERIC` for proper spreadsheet formatting
+
 ## 2025-12-15 - Full Library Sync & File Size Tracking
 
 ### New Features

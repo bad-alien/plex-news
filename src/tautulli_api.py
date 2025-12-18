@@ -36,7 +36,7 @@ class TautulliAPI:
             print(f"Error making request to Tautulli API: {e}")
             return None
 
-    def _sync_library_recursive(self, section_id, section_name, rating_key=None, level=0):
+    def _sync_library_recursive(self, section_id, section_name, rating_key=None, level=0, grandparent_rating_key=None):
         """Recursively sync library items (for TV shows: show -> season -> episode)"""
         items_synced = 0
 
@@ -45,7 +45,8 @@ class TautulliAPI:
             params = {
                 "section_id": section_id,
                 "length": 1000,
-                "start": offset
+                "start": offset,
+                "refresh": "true"  # Force fresh data from Plex, not Tautulli cache
             }
 
             if rating_key:
@@ -77,14 +78,24 @@ class TautulliAPI:
                     'duration': item.get('duration'),
                     'file_size': item.get('file_size'),
                     'added_at': item.get('added_at'),
+                    'grandparent_rating_key': grandparent_rating_key,
                 }
                 self.db.store_media_item(normalized_item)
                 items_synced += 1
 
                 # Recursively fetch children for shows and seasons
-                if media_type in ['show', 'season']:
+                if media_type == 'show':
+                    # For shows, pass the show's rating_key as grandparent for episodes
                     child_count = self._sync_library_recursive(
-                        section_id, section_name, item_rating_key, level + 1
+                        section_id, section_name, item_rating_key, level + 1,
+                        grandparent_rating_key=item_rating_key
+                    )
+                    items_synced += child_count
+                elif media_type == 'season':
+                    # For seasons, pass through the grandparent (show) rating_key
+                    child_count = self._sync_library_recursive(
+                        section_id, section_name, item_rating_key, level + 1,
+                        grandparent_rating_key=grandparent_rating_key
                     )
                     items_synced += child_count
 
@@ -95,12 +106,71 @@ class TautulliAPI:
 
         return items_synced
 
-    def sync_full_library(self):
-        """Sync all media items from all libraries with file sizes"""
-        try:
-            self.db.begin_transaction()
+    def _collect_all_rating_keys(self, libraries):
+        """Collect all current rating_keys from Plex libraries for stale data cleanup."""
+        all_keys = set()
 
-            # Get all libraries
+        for library in libraries:
+            section_id = library.get("section_id")
+            section_type = library.get("section_type")
+
+            # Get all top-level items from this library
+            offset = 0
+            while True:
+                result = self._make_request(
+                    "get_library_media_info",
+                    section_id=section_id,
+                    length=1000,
+                    start=offset,
+                    refresh="true"
+                )
+
+                if not result or "response" not in result:
+                    break
+
+                data = result["response"].get("data", {})
+                items = data.get("data", [])
+
+                if not items:
+                    break
+
+                for item in items:
+                    all_keys.add(item.get('rating_key'))
+
+                offset += len(items)
+                if offset >= data.get("recordsTotal", 0):
+                    break
+
+            # For TV shows, also collect season and episode keys
+            if section_type == 'show':
+                # Get children recursively
+                for item in items:
+                    if item.get('media_type') == 'show':
+                        self._collect_children_keys(item.get('rating_key'), all_keys)
+
+        return all_keys
+
+    def _collect_children_keys(self, rating_key, keys_set):
+        """Recursively collect rating_keys for all children of an item."""
+        result = self._make_request("get_children_metadata", rating_key=rating_key)
+        if result and "response" in result:
+            children = result["response"].get("data", {}).get("children_list", [])
+            for child in children:
+                child_key = child.get('rating_key')
+                if child_key:
+                    keys_set.add(child_key)
+                    # Recurse for seasons to get episodes
+                    if child.get('media_type') == 'season':
+                        self._collect_children_keys(child_key, keys_set)
+
+    def sync_full_library(self, cleanup_stale=True):
+        """Sync all media items from all libraries with file sizes.
+
+        Args:
+            cleanup_stale: If True, remove items from DB that no longer exist in Plex
+        """
+        try:
+            # Get all libraries first (needed for both cleanup and sync)
             result = self._make_request("get_libraries")
             if not result or "response" not in result:
                 print("Could not fetch libraries")
@@ -108,6 +178,17 @@ class TautulliAPI:
 
             libraries = result["response"].get("data", [])
             print(f"\nFound {len(libraries)} libraries to sync")
+
+            # Cleanup stale data before syncing
+            if cleanup_stale:
+                print("\n" + "=" * 60)
+                print("COLLECTING CURRENT LIBRARY DATA FOR CLEANUP")
+                print("=" * 60)
+                valid_keys = self._collect_all_rating_keys(libraries)
+                print(f"Found {len(valid_keys)} valid rating_keys in Plex")
+                self.db.remove_stale_media_items(valid_keys)
+
+            self.db.begin_transaction()
 
             total_synced = 0
 
@@ -133,7 +214,8 @@ class TautulliAPI:
                             "get_library_media_info",
                             section_id=section_id,
                             length=1000,
-                            start=offset
+                            start=offset,
+                            refresh="true"  # Force fresh data from Plex
                         )
 
                         if not result or "response" not in result:
