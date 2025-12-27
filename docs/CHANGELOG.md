@@ -1,5 +1,36 @@
 # Changelog
 
+## 2025-12-27 - Library Growth Visualization & Album Sync
+
+### New Features
+- **Library Growth Visualization** (`scripts/library_growth.py`)
+  - Interactive HTML chart showing cumulative library growth over 2025
+  - Three lines: Movies, TV Seasons, Albums
+  - Animated "drawing" effect on page load
+  - Built with Plotly for zoom/pan/hover interactivity
+  - Dark theme matching existing visualizations
+  - Output: `outputs/library_growth.html`
+
+- **Album sync for music library**
+  - Albums now synced with `added_at` timestamps (1,023 albums)
+  - Enables tracking music library growth over time
+  - Albums fetched via `get_children_metadata` from artist entries
+
+### Dependencies
+- Added `plotly` to project (interactive charting)
+
+### Database Stats (After Sync)
+- **Media items**: 14,115 total
+  - Movies: 1,432
+  - TV Shows: 207
+  - Episodes: 7,536
+  - Seasons: 595
+  - Albums: 1,023
+  - Artists: 384
+  - Tracks: 3,961
+- **Play history**: 9,752 records
+- **Storage tracked**: 9.29 TB
+
 ## 2025-12-17 - Sync Fixes & Pruning Reports
 
 ### Bug Fixes
