@@ -1,5 +1,31 @@
 # Changelog
 
+## 2025-12-31 - Decoded Manifest Generator for Year in Review
+
+### New Features
+- **Decoded Manifest Generator** (`scripts/generate_decoded_manifest.py`)
+  - Generates `decoded_manifest.json` for the Blackbox Decoded year-in-review website
+  - Daily cumulative library growth data (365 data points)
+  - Server-wide weekly usage heatmap (day × hour, value in minutes)
+  - Top 3 movies, TV shows, and artists by unique viewers/listeners
+  - Top 4 users by total usage time
+  - Full user directory with join dates (first play date)
+  - Auto-downloads poster images and user avatars to `outputs/decoded_assets/`
+  - Descriptions include both count and usernames (e.g., "Viewed by 5 users: jac7k, rakbarut...")
+
+- **User avatar support**
+  - Added `thumb` column to `users` table for storing avatar URLs
+  - Avatars fetched from Tautulli `get_users` API
+  - 22 user avatars downloaded
+
+### Output Files
+- `outputs/decoded_manifest.json` - JSON manifest for website consumption
+- `outputs/decoded_assets/` - 31 images (9 content posters + 22 user avatars)
+
+### Database Updates
+- Added `thumb` column migration to `users` table in `database.py`
+- Updated `store_play_history()` to save user thumb
+
 ## 2025-12-27 - Library Growth Visualization & Album Sync
 
 ### New Features

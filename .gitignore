@@ -44,4 +44,5 @@ output_images/
 outputs/
 data/
 assets/images/logo.*
-assets/cache/ 
+assets/cache/
+repomix-output.xml 

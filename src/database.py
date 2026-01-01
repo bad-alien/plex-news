@@ -143,6 +143,15 @@ class Database:
                 conn.commit()
                 print("Migration complete: grandparent_rating_key column added")
 
+            # Migration: Add thumb column to users table for avatars
+            try:
+                cursor.execute("SELECT thumb FROM users LIMIT 1")
+            except sqlite3.OperationalError:
+                print("Adding thumb column to users table...")
+                self.execute_with_retry(cursor, "ALTER TABLE users ADD COLUMN thumb TEXT")
+                conn.commit()
+                print("Migration complete: thumb column added to users")
+
             # Initialize sync status if not exists
             self.execute_with_retry(cursor, """
                 INSERT OR IGNORE INTO sync_status (id, last_history_sync, last_library_sync)
@@ -273,16 +282,17 @@ class Database:
         
         cursor = self._connection.cursor()
         try:
-            # Store or update user
+            # Store or update user (including thumb/avatar if available)
             self.execute_with_retry(cursor, """
                 INSERT OR REPLACE INTO users (
-                    user_id, username, friendly_name, last_seen
-                ) VALUES (?, ?, ?, ?)
+                    user_id, username, friendly_name, last_seen, thumb
+                ) VALUES (?, ?, ?, ?, ?)
             """, (
                 history_item.get('user_id', 'unknown'),
                 history_item.get('user', 'unknown'),
                 history_item.get('friendly_name', ''),
-                int(history_item.get('date', datetime.now().timestamp()))
+                int(history_item.get('date', datetime.now().timestamp())),
+                history_item.get('user_thumb', '')
             ))
             
             # Check if this history item already exists
