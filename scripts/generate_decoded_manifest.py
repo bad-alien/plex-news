@@ -31,6 +31,10 @@ OUTPUT_JSON = project_root / 'outputs' / 'decoded_manifest.json'
 ASSETS_DIR = project_root / 'outputs' / 'decoded_assets'
 YEAR = 2025
 
+# Maximum session duration to include (4 hours in seconds)
+# Sessions beyond this are likely left paused/running and skew the data
+MAX_SESSION_DURATION = 4 * 3600  # 14400 seconds
+
 # Day name mapping (SQLite strftime('%w') returns 0=Sunday)
 DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
@@ -170,16 +174,43 @@ def get_library_growth_data(conn):
 
 
 def get_weekly_pattern_data(conn):
-    """Get server-wide usage pattern by day of week and hour (in minutes)."""
+    """Get server-wide usage pattern by day of week and hour (in minutes).
+
+    Note: User timezone adjustments are applied to normalize all viewing times
+    to Pacific timezone (America/Los_Angeles) for consistent aggregation.
+
+    Sessions longer than MAX_SESSION_DURATION are excluded as outliers.
+    """
     cursor = conn.cursor()
 
-    query = """
+    # User timezone offsets (hours to ADD to normalize to Pacific)
+    # Eastern users: +3 hours (ET is 3 hours ahead of PT)
+    USER_TZ_OFFSETS = {
+        '501320151': 3,  # equa50 - Eastern timezone
+    }
+
+    # Build timezone-adjusted timestamp expression
+    # For users with offsets, we add hours to their localtime result
+    # This normalizes their viewing patterns to Pacific time
+    tz_cases = " ".join([
+        f"WHEN user_id = '{uid}' THEN {offset * 3600}"
+        for uid, offset in USER_TZ_OFFSETS.items()
+    ])
+
+    # Adjust watched_at by adding offset seconds before converting to localtime
+    # This shifts Eastern viewers' times forward so 8pm ET appears as 8pm PT
+    adjusted_timestamp = f"""
+        CASE {tz_cases} ELSE 0 END + watched_at
+    """ if tz_cases else "watched_at"
+
+    query = f"""
         SELECT
-            CAST(strftime('%w', watched_at, 'unixepoch', 'localtime') AS INTEGER) as day_num,
-            CAST(strftime('%H', watched_at, 'unixepoch', 'localtime') AS INTEGER) as hour,
+            CAST(strftime('%w', {adjusted_timestamp}, 'unixepoch', 'localtime') AS INTEGER) as day_num,
+            CAST(strftime('%H', {adjusted_timestamp}, 'unixepoch', 'localtime') AS INTEGER) as hour,
             SUM(duration) / 60 as total_minutes
         FROM play_history
         WHERE strftime('%Y', watched_at, 'unixepoch', 'localtime') = ?
+            AND duration <= {MAX_SESSION_DURATION}
         GROUP BY day_num, hour
         ORDER BY day_num, hour
     """
@@ -224,67 +255,169 @@ def get_top_movies(conn, limit=3):
     return [dict(row) for row in cursor.fetchall()]
 
 
-def get_top_shows(conn, limit=3):
-    """Get top TV shows by unique viewers, including viewer names."""
+def get_top_shows(conn, api, limit=3):
+    """Get top TV shows by unique viewers, including viewer names.
+
+    Since we don't have show entities in media_items (only synced from play history),
+    we aggregate by grandparent_rating_key from episodes and fetch show names from
+    play history API (which has grandparent_title).
+    """
     cursor = conn.cursor()
 
+    # Aggregate by grandparent_rating_key from episodes
     query = """
         SELECT
-            show.rating_key,
-            show.title,
-            show.year,
-            show.thumb,
+            ep.grandparent_rating_key as rating_key,
             COUNT(DISTINCT ph.user_id) as unique_viewers,
             GROUP_CONCAT(DISTINCT u.friendly_name) as viewer_names
-        FROM media_items show
-        JOIN media_items ep ON ep.grandparent_rating_key = show.rating_key
-            AND ep.media_type = 'episode'
+        FROM media_items ep
         JOIN play_history ph ON ep.rating_key = ph.rating_key
         JOIN users u ON ph.user_id = u.user_id
-        WHERE show.media_type = 'show'
+        WHERE ep.media_type = 'episode'
+            AND ep.grandparent_rating_key IS NOT NULL
             AND strftime('%Y', ph.watched_at, 'unixepoch', 'localtime') = ?
-        GROUP BY show.rating_key
+        GROUP BY ep.grandparent_rating_key
         ORDER BY unique_viewers DESC
         LIMIT ?
     """
 
     cursor.execute(query, (str(YEAR), limit))
-    return [dict(row) for row in cursor.fetchall()]
+    candidates = [dict(row) for row in cursor.fetchall()]
+
+    results = []
+    for candidate in candidates:
+        rating_key = candidate['rating_key']
+
+        # Fetch show name from play history API (grandparent_title)
+        try:
+            if api:
+                history_result = api._make_request(
+                    'get_history',
+                    grandparent_rating_key=rating_key,
+                    media_type='episode',
+                    length=1
+                )
+                if history_result and 'response' in history_result:
+                    data = history_result['response'].get('data', {})
+                    items = data.get('data', [])
+                    if items:
+                        show_title = items[0].get('grandparent_title', f'Show {rating_key}')
+                        show_thumb = items[0].get('grandparent_thumb', '')
+                        show_year = items[0].get('year', '')
+
+                        candidate['title'] = show_title
+                        candidate['thumb'] = show_thumb
+                        candidate['year'] = show_year
+                        results.append(candidate)
+                        continue
+
+                # Fallback if no history found
+                candidate['title'] = f'Show {rating_key}'
+                candidate['thumb'] = ''
+                candidate['year'] = ''
+                results.append(candidate)
+            else:
+                candidate['title'] = f'Show {rating_key}'
+                candidate['thumb'] = ''
+                candidate['year'] = ''
+                results.append(candidate)
+        except Exception as e:
+            print(f"    Error fetching show info for {rating_key}: {e}")
+            continue
+
+    return results
 
 
-def get_top_artists(conn, limit=3):
-    """Get top artists by unique listeners, including listener names."""
+def get_top_artists(conn, api, limit=3):
+    """Get top artists by total plays, including play count and listener names.
+
+    Note: Excludes 'Comps' as it's a compilation placeholder, not a real artist.
+
+    Since we don't have artist entities in media_items (only synced from play history),
+    we aggregate by grandparent_rating_key from tracks and fetch artist names from
+    play history API (which has grandparent_title).
+    """
     cursor = conn.cursor()
 
-    # Join tracks to artists via grandparent_rating_key
+    # Aggregate by grandparent_rating_key from tracks
     query = """
         SELECT
-            artist.rating_key,
-            artist.title,
-            artist.thumb,
+            track.grandparent_rating_key as rating_key,
+            COUNT(*) as total_plays,
             COUNT(DISTINCT ph.user_id) as unique_listeners,
             GROUP_CONCAT(DISTINCT u.friendly_name) as listener_names
         FROM media_items track
-        JOIN media_items artist ON track.grandparent_rating_key = artist.rating_key
-            AND artist.media_type = 'artist'
         JOIN play_history ph ON track.rating_key = ph.rating_key
         JOIN users u ON ph.user_id = u.user_id
         WHERE track.media_type = 'track'
+            AND track.grandparent_rating_key IS NOT NULL
             AND strftime('%Y', ph.watched_at, 'unixepoch', 'localtime') = ?
-        GROUP BY artist.rating_key
-        ORDER BY unique_listeners DESC
+        GROUP BY track.grandparent_rating_key
+        ORDER BY total_plays DESC
         LIMIT ?
     """
 
-    cursor.execute(query, (str(YEAR), limit))
-    return [dict(row) for row in cursor.fetchall()]
+    # Fetch more than needed to allow filtering out "Comps"
+    cursor.execute(query, (str(YEAR), limit + 10))
+    candidates = [dict(row) for row in cursor.fetchall()]
+
+    results = []
+    for candidate in candidates:
+        if len(results) >= limit:
+            break
+
+        rating_key = candidate['rating_key']
+
+        # Fetch artist name from play history API (grandparent_title)
+        try:
+            if api:
+                # Get a single play record for this artist to retrieve the name
+                history_result = api._make_request(
+                    'get_history',
+                    grandparent_rating_key=rating_key,
+                    media_type='track',
+                    length=1
+                )
+                if history_result and 'response' in history_result:
+                    data = history_result['response'].get('data', {})
+                    items = data.get('data', [])
+                    if items:
+                        artist_title = items[0].get('grandparent_title', f'Artist {rating_key}')
+                        artist_thumb = items[0].get('grandparent_thumb', '')
+
+                        # Skip "Comps"
+                        if artist_title.lower() == 'comps':
+                            continue
+
+                        candidate['title'] = artist_title
+                        candidate['thumb'] = artist_thumb
+                        results.append(candidate)
+                        continue
+
+                # Fallback if no history found
+                candidate['title'] = f'Artist {rating_key}'
+                candidate['thumb'] = ''
+                results.append(candidate)
+            else:
+                # No API available
+                candidate['title'] = f'Artist {rating_key}'
+                candidate['thumb'] = ''
+                results.append(candidate)
+        except Exception as e:
+            print(f"    Error fetching artist info for {rating_key}: {e}")
+            continue
+
+    return results
 
 
 def get_top_users(conn, limit=4):
-    """Get top users by total usage time (minutes), including join date."""
+    """Get top users by total usage time (minutes), including join date.
+
+    Sessions longer than MAX_SESSION_DURATION are excluded as outliers.
+    """
     cursor = conn.cursor()
 
-    query = """
+    query = f"""
         SELECT
             u.user_id,
             u.friendly_name,
@@ -294,6 +427,7 @@ def get_top_users(conn, limit=4):
         FROM play_history ph
         JOIN users u ON ph.user_id = u.user_id
         WHERE strftime('%Y', ph.watched_at, 'unixepoch', 'localtime') = ?
+            AND ph.duration <= {MAX_SESSION_DURATION}
         GROUP BY ph.user_id
         ORDER BY total_minutes DESC
         LIMIT ?
@@ -336,6 +470,81 @@ def format_minutes(minutes):
             return f"{hours:,}h {mins}m"
         return f"{hours:,} hours"
     return f"{mins} minutes"
+
+
+def format_minutes_as_days_hours(minutes):
+    """Format minutes as 'XXd XXh', rounding up partial hours."""
+    if not minutes or minutes <= 0:
+        return "0d 0h"
+
+    # Round up to nearest hour
+    total_hours = (minutes + 59) // 60
+
+    days = total_hours // 24
+    hours = total_hours % 24
+
+    return f"{days}d {hours}h"
+
+
+def get_user_play_breakdown(conn, user_id):
+    """Get play time breakdown by media type for a user (in minutes).
+
+    Sessions longer than MAX_SESSION_DURATION are excluded as outliers.
+    """
+    cursor = conn.cursor()
+
+    # Total play time
+    cursor.execute(f"""
+        SELECT COALESCE(SUM(duration), 0) / 60 as total_minutes
+        FROM play_history
+        WHERE user_id = ?
+            AND strftime('%Y', watched_at, 'unixepoch', 'localtime') = ?
+            AND duration <= {MAX_SESSION_DURATION}
+    """, (user_id, str(YEAR)))
+    total = cursor.fetchone()['total_minutes']
+
+    # Movie play time
+    cursor.execute(f"""
+        SELECT COALESCE(SUM(ph.duration), 0) / 60 as minutes
+        FROM play_history ph
+        JOIN media_items mi ON ph.rating_key = mi.rating_key
+        WHERE ph.user_id = ?
+            AND mi.media_type = 'movie'
+            AND strftime('%Y', ph.watched_at, 'unixepoch', 'localtime') = ?
+            AND ph.duration <= {MAX_SESSION_DURATION}
+    """, (user_id, str(YEAR)))
+    movie = cursor.fetchone()['minutes']
+
+    # TV play time (episodes)
+    cursor.execute(f"""
+        SELECT COALESCE(SUM(ph.duration), 0) / 60 as minutes
+        FROM play_history ph
+        JOIN media_items mi ON ph.rating_key = mi.rating_key
+        WHERE ph.user_id = ?
+            AND mi.media_type = 'episode'
+            AND strftime('%Y', ph.watched_at, 'unixepoch', 'localtime') = ?
+            AND ph.duration <= {MAX_SESSION_DURATION}
+    """, (user_id, str(YEAR)))
+    tv = cursor.fetchone()['minutes']
+
+    # Music play time (tracks)
+    cursor.execute(f"""
+        SELECT COALESCE(SUM(ph.duration), 0) / 60 as minutes
+        FROM play_history ph
+        JOIN media_items mi ON ph.rating_key = mi.rating_key
+        WHERE ph.user_id = ?
+            AND mi.media_type = 'track'
+            AND strftime('%Y', ph.watched_at, 'unixepoch', 'localtime') = ?
+            AND ph.duration <= {MAX_SESSION_DURATION}
+    """, (user_id, str(YEAR)))
+    music = cursor.fetchone()['minutes']
+
+    return {
+        'total': total or 0,
+        'movie': movie or 0,
+        'tv': tv or 0,
+        'music': music or 0
+    }
 
 
 def main():
@@ -407,7 +616,7 @@ def main():
     manifest["sections"].append({
         "type": "chart",
         "id": "library-growth",
-        "title": "Library Expansion",
+        "title": "New Stuff! New People!",
         "chart_type": "area",
         "config": {
             "xaxis_key": "date",
@@ -463,7 +672,7 @@ def main():
 
     # Top Shows
     print("  - Fetching top TV shows...")
-    top_shows = get_top_shows(conn, limit=3)
+    top_shows = get_top_shows(conn, api, limit=3)
     for i, show in enumerate(top_shows, 1):
         filename = f"{to_kebab_case(show['title'])}.jpg"
 
@@ -485,7 +694,7 @@ def main():
 
     # Top Artists
     print("  - Fetching top artists...")
-    top_artists = get_top_artists(conn, limit=3)
+    top_artists = get_top_artists(conn, api, limit=3)
     for i, artist in enumerate(top_artists, 1):
         filename = f"{to_kebab_case(artist['title'])}.jpg"
 
@@ -494,14 +703,16 @@ def main():
             if download_poster(artist['thumb'], output_path, api):
                 print(f"    Downloaded: {filename}")
 
-        # Format description with count and names
+        # Format description with total plays and user names
+        total_plays = artist.get('total_plays', 0)
         listener_names = artist.get('listener_names', '')
-        description = f"Played by {artist['unique_listeners']} users: {listener_names}"
+        description = f"{total_plays} plays by {artist['unique_listeners']} users: {listener_names}"
 
         awards_items.append({
             "category": f"#{i} Most Played Artist",
             "title": artist['title'],
             "description": description,
+            "total_plays": total_plays,
             "image_asset_name": filename
         })
 
@@ -539,8 +750,8 @@ def main():
         "items": awards_items
     })
 
-    # 5. All Users with Join Dates and Avatars
-    print("[5/6] Fetching all user join dates and avatars...")
+    # 5. All Users with Join Dates, Avatars, and Play Time Breakdown
+    print("[5/6] Fetching all user join dates, avatars, and play breakdown...")
     all_users = get_all_users_join_dates(conn)
     users_data = []
     for user in all_users:
@@ -561,10 +772,19 @@ def main():
             join_dt = dt.fromtimestamp(user['first_play_timestamp'])
             join_date = join_dt.strftime('%b %d, %Y')
 
+        # Get play time breakdown
+        play_breakdown = get_user_play_breakdown(conn, user['user_id'])
+
         users_data.append({
             "name": friendly_name,
             "join_date": join_date,
-            "image_asset_name": filename
+            "image_asset_name": filename,
+            "play_time": {
+                "total": format_minutes_as_days_hours(play_breakdown['total']),
+                "movie": format_minutes_as_days_hours(play_breakdown['movie']),
+                "tv": format_minutes_as_days_hours(play_breakdown['tv']),
+                "music": format_minutes_as_days_hours(play_breakdown['music'])
+            }
         })
 
     manifest["sections"].append({
