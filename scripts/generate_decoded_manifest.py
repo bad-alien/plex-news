@@ -368,7 +368,16 @@ def get_top_artists(conn, api, limit=3):
 
         rating_key = candidate['rating_key']
 
-        # Fetch artist name from play history API (grandparent_title)
+        # First, get artist info from database (reliable source for thumb)
+        cursor.execute("""
+            SELECT title, thumb FROM media_items
+            WHERE rating_key = ? AND media_type = 'artist'
+        """, (rating_key,))
+        db_artist = cursor.fetchone()
+        db_title = dict(db_artist)['title'] if db_artist else None
+        db_thumb = dict(db_artist)['thumb'] if db_artist else None
+
+        # Fetch artist name from play history API (grandparent_title) as backup
         try:
             if api:
                 # Get a single play record for this artist to retrieve the name
@@ -382,7 +391,7 @@ def get_top_artists(conn, api, limit=3):
                     data = history_result['response'].get('data', {})
                     items = data.get('data', [])
                     if items:
-                        artist_title = items[0].get('grandparent_title', f'Artist {rating_key}')
+                        artist_title = items[0].get('grandparent_title', db_title or f'Artist {rating_key}')
                         artist_thumb = items[0].get('grandparent_thumb', '')
 
                         # Skip "Comps"
@@ -390,22 +399,72 @@ def get_top_artists(conn, api, limit=3):
                             continue
 
                         candidate['title'] = artist_title
-                        candidate['thumb'] = artist_thumb
+                        # Use API thumb if available, otherwise fall back to database thumb
+                        candidate['thumb'] = artist_thumb if artist_thumb else db_thumb
                         results.append(candidate)
                         continue
 
-                # Fallback if no history found
-                candidate['title'] = f'Artist {rating_key}'
-                candidate['thumb'] = ''
+                # Fallback if no history found - use database values
+                candidate['title'] = db_title or f'Artist {rating_key}'
+                candidate['thumb'] = db_thumb or ''
                 results.append(candidate)
             else:
-                # No API available
-                candidate['title'] = f'Artist {rating_key}'
-                candidate['thumb'] = ''
+                # No API available - use database values
+                candidate['title'] = db_title or f'Artist {rating_key}'
+                candidate['thumb'] = db_thumb or ''
                 results.append(candidate)
         except Exception as e:
             print(f"    Error fetching artist info for {rating_key}: {e}")
             continue
+
+    return results
+
+
+def get_top_albums(conn, api, limit=3):
+    """Get top albums by total plays, including play count and listener names.
+
+    Note: Excludes compilation albums under 'Comps' artist.
+
+    Aggregates by album rating_key (parent of tracks) from play history.
+    Uses parent_rating_key on tracks to link to albums.
+    """
+    cursor = conn.cursor()
+
+    # Get top albums from track plays using parent_rating_key for track->album linking
+    query = """
+        SELECT
+            album.rating_key,
+            album.title,
+            album.thumb,
+            album.grandparent_rating_key as artist_rating_key,
+            COUNT(*) as total_plays,
+            COUNT(DISTINCT ph.user_id) as unique_listeners,
+            GROUP_CONCAT(DISTINCT u.friendly_name) as listener_names
+        FROM media_items track
+        JOIN media_items album ON track.parent_rating_key = album.rating_key
+        JOIN play_history ph ON track.rating_key = ph.rating_key
+        JOIN users u ON ph.user_id = u.user_id
+        WHERE track.media_type = 'track'
+            AND album.media_type = 'album'
+            AND strftime('%Y', ph.watched_at, 'unixepoch', 'localtime') = ?
+        GROUP BY album.rating_key
+        ORDER BY total_plays DESC
+        LIMIT ?
+    """
+
+    cursor.execute(query, (str(YEAR), limit + 10))
+    candidates = [dict(row) for row in cursor.fetchall()]
+
+    results = []
+    for candidate in candidates:
+        if len(results) >= limit:
+            break
+
+        # Skip if title contains "Comps" (compilations)
+        if candidate.get('title') and 'comps' in candidate['title'].lower():
+            continue
+
+        results.append(candidate)
 
     return results
 
@@ -454,6 +513,27 @@ def get_all_users_join_dates(conn):
     """
 
     cursor.execute(query)
+    return [dict(row) for row in cursor.fetchall()]
+
+
+def get_users_joined_in_year(conn, year):
+    """Get users who joined (first play) in a specific year."""
+    cursor = conn.cursor()
+
+    query = """
+        SELECT
+            u.user_id,
+            u.friendly_name,
+            u.thumb,
+            MIN(ph.watched_at) as first_play_timestamp
+        FROM users u
+        JOIN play_history ph ON u.user_id = ph.user_id
+        GROUP BY u.user_id
+        HAVING strftime('%Y', MIN(ph.watched_at), 'unixepoch', 'localtime') = ?
+        ORDER BY first_play_timestamp ASC
+    """
+
+    cursor.execute(query, (str(year),))
     return [dict(row) for row in cursor.fetchall()]
 
 
@@ -613,6 +693,35 @@ def main():
     # 2. Library Growth Chart
     print("[2/5] Generating library growth data...")
     growth_data = get_library_growth_data(conn)
+
+    # Get users who joined in this year for user_joins array
+    print("  - Getting users who joined in 2025...")
+    users_joined = get_users_joined_in_year(conn, YEAR)
+    user_joins = []
+    for user in users_joined:
+        friendly_name = user['friendly_name'] or f"User {user['user_id']}"
+        filename = f"user-{to_kebab_case(friendly_name)}.jpg"
+
+        # Download avatar if available
+        if can_download_images and user.get('thumb'):
+            output_path = ASSETS_DIR / filename
+            if not output_path.exists():
+                if download_user_avatar(user['thumb'], output_path, api):
+                    print(f"    Downloaded: {filename}")
+
+        # Format join date
+        join_date = ""
+        if user.get('first_play_timestamp'):
+            from datetime import datetime as dt
+            join_dt = dt.fromtimestamp(user['first_play_timestamp'])
+            join_date = join_dt.strftime('%b %-d')
+
+        user_joins.append({
+            "username": friendly_name,
+            "date": join_date,
+            "avatar": filename
+        })
+
     manifest["sections"].append({
         "type": "chart",
         "id": "library-growth",
@@ -626,7 +735,8 @@ def main():
                 {"key": "albums", "label": "Albums", "color": "#2ecc71"}
             ]
         },
-        "data": growth_data
+        "data": growth_data,
+        "user_joins": user_joins
     })
 
     # 3. Weekly Pattern Heatmap
@@ -711,6 +821,30 @@ def main():
         awards_items.append({
             "category": f"#{i} Most Played Artist",
             "title": artist['title'],
+            "description": description,
+            "total_plays": total_plays,
+            "image_asset_name": filename
+        })
+
+    # Top Albums
+    print("  - Fetching top albums...")
+    top_albums = get_top_albums(conn, api, limit=3)
+    for i, album in enumerate(top_albums, 1):
+        filename = f"album-{to_kebab_case(album['title'])}.jpg"
+
+        if can_download_images and album.get('thumb'):
+            output_path = ASSETS_DIR / filename
+            if download_poster(album['thumb'], output_path, api):
+                print(f"    Downloaded: {filename}")
+
+        # Format description with total plays and user names
+        total_plays = album.get('total_plays', 0)
+        listener_names = album.get('listener_names', '')
+        description = f"{total_plays} plays by {album['unique_listeners']} users: {listener_names}"
+
+        awards_items.append({
+            "category": f"#{i} Most Played Album",
+            "title": album['title'],
             "description": description,
             "total_plays": total_plays,
             "image_asset_name": filename

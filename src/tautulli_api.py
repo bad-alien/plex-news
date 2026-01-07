@@ -106,6 +106,79 @@ class TautulliAPI:
 
         return items_synced
 
+    def _sync_music_library_recursive(self, section_id, section_name, rating_key=None, level=0, grandparent_rating_key=None, parent_rating_key=None):
+        """Recursively sync music library items (artist -> album -> track)"""
+        items_synced = 0
+
+        offset = 0
+        while True:
+            params = {
+                "section_id": section_id,
+                "length": 1000,
+                "start": offset,
+                "refresh": "true"
+            }
+
+            if rating_key:
+                params["rating_key"] = rating_key
+
+            result = self._make_request("get_library_media_info", **params)
+
+            if not result or "response" not in result:
+                break
+
+            data = result["response"].get("data", {})
+            items = data.get("data", [])
+            total_records = data.get("recordsTotal", 0)
+
+            if not items:
+                break
+
+            for item in items:
+                media_type = item.get('media_type')
+                item_rating_key = item.get('rating_key')
+
+                # Store this item
+                normalized_item = {
+                    'rating_key': item_rating_key,
+                    'title': item.get('title'),
+                    'year': item.get('year'),
+                    'media_type': media_type,
+                    'thumb': item.get('thumb'),
+                    'duration': item.get('duration'),
+                    'file_size': item.get('file_size'),
+                    'added_at': item.get('added_at'),
+                    'grandparent_rating_key': grandparent_rating_key,
+                    'parent_rating_key': parent_rating_key,
+                }
+                self.db.store_media_item(normalized_item)
+                items_synced += 1
+
+                # Recursively fetch children for artists (albums) and albums (tracks)
+                if media_type == 'artist':
+                    # For artists, get albums (pass artist's rating_key as grandparent for tracks)
+                    child_count = self._sync_music_library_recursive(
+                        section_id, section_name, item_rating_key, level + 1,
+                        grandparent_rating_key=item_rating_key,
+                        parent_rating_key=None  # Albums don't have a parent_rating_key
+                    )
+                    items_synced += child_count
+                elif media_type == 'album':
+                    # For albums, get tracks (pass album's rating_key as parent for tracks)
+                    child_count = self._sync_music_library_recursive(
+                        section_id, section_name, item_rating_key, level + 1,
+                        grandparent_rating_key=grandparent_rating_key,
+                        parent_rating_key=item_rating_key  # Pass album as parent for tracks
+                    )
+                    items_synced += child_count
+
+            offset += len(items)
+
+            if offset >= total_records:
+                break
+
+        return items_synced
+
     def _collect_all_rating_keys(self, libraries):
         """Collect all current rating_keys from Plex libraries for stale data cleanup."""
         all_keys = set()
@@ -147,8 +220,32 @@ class TautulliAPI:
                 for item in items:
                     if item.get('media_type') == 'show':
                         self._collect_children_keys(item.get('rating_key'), all_keys)
+            # For Music, also collect album and track keys
+            elif section_type == 'artist':
+                for item in items:
+                    if item.get('media_type') == 'artist':
+                        self._collect_music_children_keys(section_id, item.get('rating_key'), all_keys)
 
         return all_keys
+
+    def _collect_music_children_keys(self, section_id, rating_key, keys_set):
+        """Collect rating_keys for albums and tracks under an artist."""
+        # Get albums for this artist
+        result = self._make_request("get_library_media_info", section_id=section_id, rating_key=rating_key, length=1000)
+        if result and "response" in result:
+            albums = result["response"].get("data", {}).get("data", [])
+            for album in albums:
+                album_key = album.get('rating_key')
+                if album_key:
+                    keys_set.add(album_key)
+                    # Get tracks for this album
+                    tracks_result = self._make_request("get_library_media_info", section_id=section_id, rating_key=album_key, length=1000)
+                    if tracks_result and "response" in tracks_result:
+                        tracks = tracks_result["response"].get("data", {}).get("data", [])
+                        for track in tracks:
+                            track_key = track.get('rating_key')
+                            if track_key:
+                                keys_set.add(track_key)
 
     def _collect_children_keys(self, rating_key, keys_set):
         """Recursively collect rating_keys for all children of an item."""
@@ -203,6 +300,11 @@ class TautulliAPI:
                 if section_type == 'show':
                     library_total = self._sync_library_recursive(section_id, section_name)
                     print(f"✓ Completed {section_name}: {library_total} items (shows, seasons, episodes)")
+                    total_synced += library_total
+                # For Music libraries, use recursive sync to get albums and tracks
+                elif section_type == 'artist':
+                    library_total = self._sync_music_library_recursive(section_id, section_name)
+                    print(f"✓ Completed {section_name}: {library_total} items (artists, albums, tracks)")
                     total_synced += library_total
                 else:
                     # For other libraries (movies, music), use regular pagination

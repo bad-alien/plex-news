@@ -152,6 +152,15 @@ class Database:
                 conn.commit()
                 print("Migration complete: thumb column added to users")
 
+            # Migration: Add parent_rating_key column for tracks -> album linking
+            try:
+                cursor.execute("SELECT parent_rating_key FROM media_items LIMIT 1")
+            except sqlite3.OperationalError:
+                print("Adding parent_rating_key column to media_items table...")
+                self.execute_with_retry(cursor, "ALTER TABLE media_items ADD COLUMN parent_rating_key TEXT")
+                conn.commit()
+                print("Migration complete: parent_rating_key column added")
+
             # Initialize sync status if not exists
             self.execute_with_retry(cursor, """
                 INSERT OR IGNORE INTO sync_status (id, last_history_sync, last_library_sync)
@@ -253,8 +262,8 @@ class Database:
                 INSERT OR REPLACE INTO media_items (
                     rating_key, title, year, media_type,
                     thumb, art, banner, summary, duration, file_size,
-                    grandparent_rating_key, added_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    grandparent_rating_key, parent_rating_key, added_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 item.get('rating_key'),
                 item.get('title'),
@@ -267,6 +276,7 @@ class Database:
                 item.get('duration'),
                 item.get('file_size'),
                 item.get('grandparent_rating_key'),
+                item.get('parent_rating_key'),
                 item.get('added_at'),
                 int(datetime.now().timestamp())
             ))

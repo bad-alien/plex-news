@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-01-06 - Top Albums & Music Library Sync Fix
+
+### New Features
+- **Top Albums section** in decoded manifest (under top artists)
+  - Shows top 3 albums by play count with listener names
+  - Excludes compilation albums ("Comps")
+
+### Bug Fixes
+- **Fixed music library sync** to properly link tracks to albums
+  - Added `parent_rating_key` column to `media_items` table
+  - Tracks now store their parent album's rating_key
+  - Enables accurate album play count aggregation
+
+- **Fixed artist thumbnail fallback**
+  - Now uses database thumb when API doesn't return `grandparent_thumb`
+  - All 3 top artist images now download correctly
+
+### Database Updates
+- Added `parent_rating_key` column migration to `media_items` table
+- Music sync now populates: artist (grandparent) → album (parent) → track hierarchy
+
 ## 2025-12-31 - Decoded Manifest Generator for Year in Review
 
 ### New Features
